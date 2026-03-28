@@ -1,6 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 
-const callProxy = async (action: string, payload: Record<string, unknown>) => {
+const callProxy = async (action: string, payload: Record<string, unknown> | object) => {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Not authenticated");
 
