@@ -14,7 +14,90 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      calculation_logs: {
+        Row: {
+          base_id: string
+          created_at: string
+          id: string
+          provider_used: string
+          records_processed: number
+          table_id: string
+          user_id: string
+        }
+        Insert: {
+          base_id: string
+          created_at?: string
+          id?: string
+          provider_used: string
+          records_processed: number
+          table_id: string
+          user_id: string
+        }
+        Update: {
+          base_id?: string
+          created_at?: string
+          id?: string
+          provider_used?: string
+          records_processed?: number
+          table_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      saved_mappings: {
+        Row: {
+          distance_col_id: string
+          end_col_id: string
+          id: string
+          start_col_id: string
+          table_id: string
+          user_id: string
+        }
+        Insert: {
+          distance_col_id: string
+          end_col_id: string
+          id?: string
+          start_col_id: string
+          table_id: string
+          user_id: string
+        }
+        Update: {
+          distance_col_id?: string
+          end_col_id?: string
+          id?: string
+          start_col_id?: string
+          table_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_settings: {
+        Row: {
+          airtable_pat: string | null
+          created_at: string
+          id: string
+          maps_api_key: string | null
+          maps_provider: string | null
+          updated_at: string
+        }
+        Insert: {
+          airtable_pat?: string | null
+          created_at?: string
+          id: string
+          maps_api_key?: string | null
+          maps_provider?: string | null
+          updated_at?: string
+        }
+        Update: {
+          airtable_pat?: string | null
+          created_at?: string
+          id?: string
+          maps_api_key?: string | null
+          maps_provider?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
