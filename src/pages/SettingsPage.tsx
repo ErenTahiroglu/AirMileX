@@ -120,7 +120,7 @@ const SettingsPage = () => {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Label htmlFor="mapsKey">API Key</Label>
-                {hasMapsKey && <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">Active</Badge>}
+                {hasMapsKey && <Badge variant="outline" className="text-xs border-green-600 text-green-700">Active</Badge>}
               </div>
               <Input
                 id="mapsKey"
