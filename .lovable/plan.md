@@ -1,216 +1,96 @@
 
 
-# Mileage Calculator App — Revised Implementation Plan
+# Stripe Credit System — Execution Plan
 
-## Architecture Overview
+## Current State
+- `user_settings` table exists but has no `credits` column
+- `airtable-proxy` edge function exists with sync-records but no credit checks
+- No Stripe integration enabled yet
+- No `processed_stripe_events` table
+- No `deduct_credits` RPC function
 
-```text
-┌─────────────────────────────────────────────────────┐
-│  React Client (Vite + Tailwind + shadcn/ui)         │
-│                                                      │
-│  Pages: / (Auth) │ /dashboard │ /settings │ /new-job │
-│                                                      │
-│  ALL external API calls go through Edge Functions    │
-│  Client ──POST──▶ Edge Function ──▶ External API    │
-└──────────────┬──────────────────────────────────────┘
-               │ Supabase JS Client
-               ▼
-┌──────────────────────────────────────────────────────┐
-│  Supabase (Lovable Cloud)                            │
-│                                                      │
-│  Auth: Email/Password                                │
-│  Tables: user_settings, calculation_logs,            │
-│          saved_mappings                               │
-│  Edge Functions:                                     │
-│    • airtable-proxy (meta, read, write/sync)         │
-│    • distance-proxy (Google Maps / OpenRouteService)  │
-└──────────────────────────────────────────────────────┘
+## Step 1: Database Migrations
+
+**Migration A — Add `credits` column to `user_settings`:**
+```sql
+ALTER TABLE user_settings ADD COLUMN credits integer NOT NULL DEFAULT 50;
 ```
 
----
-
-## Phase 1: Supabase Setup & Auth
-
-### Enable Lovable Cloud backend
-
-### Database tables (3 migrations)
-
-**Table 1: `user_settings`**
-- `id` uuid PK → FK `auth.users(id)` ON DELETE CASCADE
-- `airtable_pat` text
-- `maps_api_key` text
-- `maps_provider` text (CHECK: 'google' or 'openrouteservice')
-- `created_at`, `updated_at`
-- RLS: user can SELECT/INSERT/UPDATE own row only
-
-**Table 2: `calculation_logs`**
-- `id` uuid PK default gen_random_uuid()
-- `user_id` uuid FK → `auth.users(id)` ON DELETE CASCADE, NOT NULL
-- `base_id` text NOT NULL
-- `table_id` text NOT NULL
-- `records_processed` int NOT NULL
-- `provider_used` text NOT NULL
-- `created_at` timestamptz default now()
-- RLS: user can SELECT/INSERT own rows only
-
-**Table 3: `saved_mappings`**
-- `id` uuid PK default gen_random_uuid()
-- `user_id` uuid FK → `auth.users(id)` ON DELETE CASCADE, NOT NULL
-- `table_id` text NOT NULL
-- `start_col_id` text NOT NULL
-- `end_col_id` text NOT NULL
-- `distance_col_id` text NOT NULL
-- UNIQUE(user_id, table_id)
-- RLS: user can SELECT/INSERT/UPDATE/DELETE own rows only
-
-### Auth
-- Email/password signup & login on landing page (`/`)
-- Auth context provider wrapping protected routes
-- Redirect: unauthenticated → `/`, authenticated → `/dashboard`
-
----
-
-## Phase 2: Edge Functions (CORS-safe API Proxies)
-
-**No external API calls from the browser.** All go through Edge Functions.
-
-### Edge Function 1: `airtable-proxy`
-
-Handles all Airtable communication. Client sends the user's PAT + action payload. The Edge Function makes the actual request to Airtable.
-
-**Actions (dispatched by a `action` field in the request body):**
-
-| Action | What it does |
-|--------|-------------|
-| `whoami` | GET `https://api.airtable.com/v0/meta/whoami` — test PAT validity |
-| `list-bases` | GET `.../meta/bases` — list user's bases |
-| `list-tables` | GET `.../meta/bases/{baseId}/tables` — list tables + field schemas |
-| `read-records` | GET `.../v0/{baseId}/{tableId}` with filterByFormula for empty distance field, limit 5 |
-| `sync-records` | PATCH `.../v0/{baseId}/{tableId}` — **batched write with rate limiting** |
-
-**`sync-records` batching algorithm:**
-1. Accept full array of record updates from client
-2. Chunk into batches of **10 records**
-3. Send each batch as a PATCH request
-4. Wait **250ms** between batches
-5. On 429 response: exponential backoff (1s, 2s, 4s, max 3 retries)
-6. Return `{ synced: number, failed: number, errors: [] }` plus per-batch progress via streaming (or a final summary)
-7. Edge Function streams progress updates back to client so the UI can show "Synced X of Y"
-
-**CORS headers** on all responses (including OPTIONS preflight):
-```
-Access-Control-Allow-Origin: *
-Access-Control-Allow-Headers: authorization, content-type, apikey, x-client-info
+**Migration B — Create `processed_stripe_events` table:**
+```sql
+CREATE TABLE processed_stripe_events (
+  id text PRIMARY KEY,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE processed_stripe_events ENABLE ROW LEVEL SECURITY;
+-- No user-facing RLS policies — only service role accesses this table
 ```
 
-### Edge Function 2: `distance-proxy`
-
-Handles distance calculation. Client sends addresses + provider + API key.
-
-**Logic:**
-- If `provider === 'google'`: call Google Distance Matrix API
-- If `provider === 'openrouteservice'`: call ORS Directions API
-- Accept a batch of address pairs, return distances
-- No client-side API calls to Maps providers
-
-**Request shape:**
-```json
-{
-  "provider": "google",
-  "api_key": "user's key",
-  "pairs": [
-    { "record_id": "rec123", "start": "123 Main St", "end": "456 Oak Ave" }
-  ]
-}
+**Migration C — Create `deduct_credits` RPC function:**
+```sql
+CREATE OR REPLACE FUNCTION deduct_credits(p_user_id uuid, p_amount integer)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE new_balance integer;
+BEGIN
+  UPDATE user_settings SET credits = credits - p_amount
+  WHERE id = p_user_id AND credits >= p_amount
+  RETURNING credits INTO new_balance;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Insufficient credits'; END IF;
+  RETURN new_balance;
+END;
+$$;
 ```
 
-**Response:** `{ results: [{ record_id, distance_km, distance_mi, status }] }`
+## Step 2: Enable Stripe
 
----
+Use `stripe--enable_stripe` tool to collect the Stripe secret key and unlock Stripe tools/context.
 
-## Phase 3: Frontend Pages & Components
+## Step 3: Update `airtable-proxy` Edge Function
 
-### Routing
-| Route | Component | Auth |
-|-------|-----------|------|
-| `/` | `AuthPage` (login/register) | Public |
-| `/dashboard` | `Dashboard` | Protected |
-| `/settings` | `SettingsPage` | Protected |
-| `/new-job` | `NewJobPage` | Protected |
+In the `sync-records` case, add credit enforcement using JWT-based auth (IDOR fix):
 
-### Landing / Auth Page (`/`)
-- Clean login/register form with tab toggle
-- Email + password fields, submit button
-- Redirect to `/dashboard` on success
+1. Extract JWT from `Authorization` header using `getClaims()` to get `user_id` — never from request body
+2. Create a service-role Supabase client
+3. Check `user_settings.credits >= records.length` — return 402 if insufficient
+4. Execute existing batching algorithm (unchanged)
+5. Call `deduct_credits` RPC with `synced` count atomically
+6. Return `{ synced, failed, errors, credits_remaining }` in response
 
-### Dashboard (`/dashboard`)
-- Total records processed widget (query `calculation_logs` sum)
-- Navigation links to Settings and New Job
-- Recent sync history list
+## Step 4: Create `stripe-checkout` Edge Function
 
-### Settings (`/settings`)
-- Form: Airtable PAT (password input), Maps API Key (password input), Maps Provider (dropdown)
-- Save to `user_settings` via Supabase client
-- Green checkmark badges for saved keys
-- "Test Airtable Connection" button → calls `airtable-proxy` with `whoami` action → toast result
+- Validates JWT via `getClaims()` to get `user_id`
+- Creates Stripe Checkout Session: 500 credits line item, metadata `{ user_id }`
+- Returns `{ url }` for client redirect
 
-### New Mileage Job (`/new-job`)
-1. **Base selector** — on mount, call `airtable-proxy` `list-bases` → dropdown
-2. **Table selector** — on base select, call `airtable-proxy` `list-tables` → dropdown
-3. **Auto-populate mappings** — on table select, query `saved_mappings` for this `table_id`. If found, pre-fill the three column dropdowns
-4. **Column mapping** — 3 dropdowns: Start Address, End Address, Distance Output (populated from table field schema)
-5. **Save mapping** — upsert to `saved_mappings` when user changes columns
-6. **Fetch Preview** — button fetches 5 records with empty distance field via `airtable-proxy` `read-records`, displayed in a simple table
-7. **Calculate** — sends address pairs to `distance-proxy`, receives distances
-8. **Sync to Airtable** — calls `airtable-proxy` `sync-records`
-   - UI shows progress bar: "Synced X of Y records" (updated as batches complete)
-   - On completion: write to `calculation_logs` (with `base_id` and `table_id`), show success toast
+## Step 5: Create `stripe-webhook` Edge Function
 
----
+- Verifies Stripe signature
+- On `checkout.session.completed`: attempt INSERT into `processed_stripe_events` with event ID
+- If duplicate (constraint violation) → return 200, skip
+- If new → `UPDATE user_settings SET credits = credits + 500 WHERE id = metadata.user_id`
+- Return 200
 
-## Phase 4: Shared Infrastructure
+## Step 6: Frontend Changes
 
-### Services layer (`src/services/`)
-- `airtable.ts` — functions that call `airtable-proxy` edge function
-- `distance.ts` — function that calls `distance-proxy` edge function
-- `settings.ts` — CRUD for `user_settings`
-- `mappings.ts` — CRUD for `saved_mappings`
-- `logs.ts` — read/write `calculation_logs`
+**`src/services/settings.ts`**: Add `credits` to `UserSettings` interface and SELECT query.
 
-### Auth (`src/contexts/AuthContext.tsx`)
-- `onAuthStateChange` listener set up before `getSession()`
-- Provides `user`, `session`, `signIn`, `signUp`, `signOut`
+**`src/services/stripe.ts`** (new): `createCheckoutSession()` calls `stripe-checkout` edge function.
 
-### Protected route wrapper
-- Redirects to `/` if no session
+**`src/pages/Dashboard.tsx`**: Display credits in a bold card, add "Buy More Credits" button.
 
----
+**`src/pages/NewJobPage.tsx`**: Handle 402 from sync — show "Not enough credits" toast.
 
-## File Structure
-
-```text
-src/
-  contexts/AuthContext.tsx
-  services/airtable.ts, distance.ts, settings.ts, mappings.ts, logs.ts
-  pages/AuthPage.tsx, Dashboard.tsx, SettingsPage.tsx, NewJobPage.tsx
-  components/
-    ProtectedRoute.tsx
-    settings/SettingsForm.tsx, ConnectionBadge.tsx
-    job/BaseTableSelector.tsx, ColumnMapper.tsx, RecordPreview.tsx, SyncProgress.tsx
-    dashboard/StatsWidget.tsx, RecentSyncs.tsx
-supabase/functions/
-  airtable-proxy/index.ts
-  distance-proxy/index.ts
-```
-
----
-
-## Security Summary
-
-- **No direct browser calls** to Airtable, Google Maps, or OpenRouteService
-- API keys sent to Edge Functions per-request (not stored in Edge Function env)
-- All tables have RLS — users access only their own data
-- Edge Functions validate auth token before processing
-- Airtable sync uses 10-record batches + 250ms delay + exponential backoff on 429
-- Input validation with zod on both client and Edge Functions
+## Files Modified/Created
+- 3 database migrations
+- `supabase/functions/airtable-proxy/index.ts` — updated
+- `supabase/functions/stripe-checkout/index.ts` — new
+- `supabase/functions/stripe-webhook/index.ts` — new
+- `src/services/settings.ts` — updated
+- `src/services/stripe.ts` — new
+- `src/pages/Dashboard.tsx` — updated
+- `src/pages/NewJobPage.tsx` — updated
 
