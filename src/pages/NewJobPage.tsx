@@ -181,7 +181,16 @@ const NewJobPage = () => {
 
       toast({ title: "Sync complete", description: `${result.synced ?? records.length} records updated.` });
     } catch (e: unknown) {
-      toast({ title: "Sync failed", description: (e as Error).message, variant: "destructive" });
+      const msg = (e as Error).message;
+      if (msg.includes("402") || msg.includes("Insufficient credits")) {
+        toast({
+          title: "Not enough credits",
+          description: "You don't have enough credits for this sync. Buy more from the dashboard.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Sync failed", description: msg, variant: "destructive" });
+      }
     } finally {
       setSyncing(false);
     }
