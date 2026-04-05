@@ -5,6 +5,7 @@ export interface UserSettings {
   airtable_pat: string | null;
   maps_api_key: string | null;
   maps_provider: string | null;
+  credits: number;
 }
 
 export const getSettings = async (userId: string): Promise<UserSettings | null> => {
