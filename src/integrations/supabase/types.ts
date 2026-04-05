@@ -44,6 +44,21 @@ export type Database = {
         }
         Relationships: []
       }
+      processed_polar_events: {
+        Row: {
+          created_at: string
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+        }
+        Relationships: []
+      }
       saved_mappings: {
         Row: {
           distance_col_id: string
@@ -75,6 +90,7 @@ export type Database = {
         Row: {
           airtable_pat: string | null
           created_at: string
+          credits: number
           id: string
           maps_api_key: string | null
           maps_provider: string | null
@@ -83,6 +99,7 @@ export type Database = {
         Insert: {
           airtable_pat?: string | null
           created_at?: string
+          credits?: number
           id: string
           maps_api_key?: string | null
           maps_provider?: string | null
@@ -91,6 +108,7 @@ export type Database = {
         Update: {
           airtable_pat?: string | null
           created_at?: string
+          credits?: number
           id?: string
           maps_api_key?: string | null
           maps_provider?: string | null
@@ -103,7 +121,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      deduct_credits: {
+        Args: { p_amount: number; p_user_id: string }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never
