@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getTotalRecords, getRecentLogs, CalculationLog } from "@/services/logs";
+import { getSettings } from "@/services/settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -9,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 const Dashboard = () => {
   const { user, signOut } = useAuth();
   const [total, setTotal] = useState(0);
+  const [credits, setCredits] = useState<number | null>(null);
   const [logs, setLogs] = useState<CalculationLog[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -16,12 +18,14 @@ const Dashboard = () => {
     if (!user) return;
     const load = async () => {
       try {
-        const [t, l] = await Promise.all([
+        const [t, l, s] = await Promise.all([
           getTotalRecords(user.id),
           getRecentLogs(user.id, 5),
+          getSettings(user.id),
         ]);
         setTotal(t);
         setLogs(l);
+        setCredits(s?.credits ?? 0);
       } catch {
         // silent
       } finally {
@@ -49,18 +53,33 @@ const Dashboard = () => {
           <Button asChild><Link to="/new-job">New Mileage Job</Link></Button>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Total Records Processed</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-            ) : (
-              <p className="text-3xl font-bold text-foreground">{total.toLocaleString()}</p>
-            )}
-          </CardContent>
-        </Card>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Total Records Processed</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+              ) : (
+                <p className="text-3xl font-bold text-foreground">{total.toLocaleString()}</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Credits Remaining</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+              ) : (
+                <p className="text-3xl font-bold text-foreground">{credits?.toLocaleString() ?? 0}</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
         {logs.length > 0 && (
           <Card>
