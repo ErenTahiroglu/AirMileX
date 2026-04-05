@@ -11,7 +11,7 @@ export interface UserSettings {
 export const getSettings = async (userId: string): Promise<UserSettings | null> => {
   const { data, error } = await supabase
     .from("user_settings")
-    .select("id, airtable_pat, maps_api_key, maps_provider")
+    .select("id, airtable_pat, maps_api_key, maps_provider, credits")
     .eq("id", userId)
     .maybeSingle();
 

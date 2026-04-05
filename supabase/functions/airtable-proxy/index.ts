@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -83,13 +84,41 @@ async function syncWithBatching(
   return { synced, failed, errors };
 }
 
+function getServiceClient() {
+  return createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+}
+
+async function getUserIdFromAuth(req: Request): Promise<string> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    throw new Error("Unauthorized");
+  }
+
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: authHeader } } }
+  );
+
+  const token = authHeader.replace("Bearer ", "");
+  const { data, error } = await supabase.auth.getClaims(token);
+  if (error || !data?.claims) {
+    throw new Error("Unauthorized");
+  }
+  return data.claims.sub as string;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    const { action, pat, baseId, tableId, distanceFieldId, limit, records } = await req.json();
+    const body = await req.json();
+    const { action, pat, baseId, tableId, distanceFieldId, limit, records } = body;
 
     if (!pat) {
       return new Response(JSON.stringify({ error: "Missing PAT" }), {
@@ -126,7 +155,56 @@ serve(async (req) => {
         if (!baseId || !tableId || !distanceFieldId || !records?.length) {
           throw new Error("Missing sync params");
         }
-        result = await syncWithBatching(pat, baseId, tableId, distanceFieldId, records);
+
+        // Extract user_id from JWT — never trust request body
+        const userId = await getUserIdFromAuth(req);
+        const serviceClient = getServiceClient();
+
+        // Check credits
+        const { data: settings, error: settingsErr } = await serviceClient
+          .from("user_settings")
+          .select("credits")
+          .eq("id", userId)
+          .single();
+
+        if (settingsErr || !settings) {
+          throw new Error("Could not fetch user settings");
+        }
+
+        if (settings.credits < records.length) {
+          return new Response(
+            JSON.stringify({
+              error: "Insufficient credits",
+              credits_available: settings.credits,
+            }),
+            {
+              status: 402,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
+
+        // Run existing batching
+        const syncResult = await syncWithBatching(pat, baseId, tableId, distanceFieldId, records);
+
+        // Deduct credits atomically for successfully synced records
+        if (syncResult.synced > 0) {
+          const { data: newBalance, error: deductErr } = await serviceClient.rpc(
+            "deduct_credits",
+            { p_user_id: userId, p_amount: syncResult.synced }
+          );
+
+          if (deductErr) {
+            console.error("Credit deduction failed:", deductErr.message);
+          }
+
+          result = {
+            ...syncResult,
+            credits_remaining: newBalance ?? settings.credits - syncResult.synced,
+          };
+        } else {
+          result = { ...syncResult, credits_remaining: settings.credits };
+        }
         break;
       }
 
@@ -138,8 +216,10 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: (err as Error).message }), {
-      status: 400,
+    const message = (err as Error).message;
+    const status = message === "Unauthorized" ? 401 : 400;
+    return new Response(JSON.stringify({ error: message }), {
+      status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
