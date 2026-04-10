@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import Footer from "@/components/Footer";
 
 const AuthPage = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -40,7 +41,7 @@ const AuthPage = () => {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-xl">Mileage Calculator</CardTitle>
@@ -84,6 +85,9 @@ const AuthPage = () => {
           </button>
         </CardContent>
       </Card>
+      <div className="mt-auto w-full">
+        <Footer />
+      </div>
     </div>
   );
 };
