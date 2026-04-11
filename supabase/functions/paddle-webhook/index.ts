@@ -5,7 +5,6 @@ async function verifySignature(
   signatureHeader: string,
   secret: string
 ): Promise<boolean> {
-  // Parse "ts=...;h1=..." format
   const parts: Record<string, string> = {};
   for (const part of signatureHeader.split(";")) {
     const [key, value] = part.split("=");
@@ -56,7 +55,6 @@ Deno.serve(async (req) => {
 
     const event = JSON.parse(rawBody);
 
-    // Only process completed transactions
     if (event.event_type !== "transaction.completed") {
       return new Response("OK", { status: 200 });
     }
@@ -69,19 +67,17 @@ Deno.serve(async (req) => {
       return new Response("Bad request", { status: 400 });
     }
 
-    // Service-role client for privileged operations
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Idempotency check
+    // Idempotency: insert event ID, conflict = already processed
     const { error: insertError } = await supabase
       .from("processed_paddle_events")
       .insert({ id: eventId });
 
     if (insertError) {
-      // Unique constraint violation = already processed
       if (insertError.code === "23505") {
         console.log(`Event ${eventId} already processed, skipping`);
         return new Response("OK", { status: 200 });
@@ -90,56 +86,29 @@ Deno.serve(async (req) => {
       return new Response("Internal error", { status: 500 });
     }
 
-    // Add 500 credits
-    const { error: updateError } = await supabase
-      .from("user_settings")
-      .update({ credits: undefined }) // placeholder, using raw SQL below
-      .eq("id", "placeholder");
-
-    // Use rpc or raw update via service role
-    const { error: creditError } = await supabase.rpc("deduct_credits", {
-      p_user_id: userId,
-      p_amount: -500,
-    });
-
-    // deduct_credits subtracts, so passing -500 adds 500.
-    // However, the function checks credits >= p_amount which would fail for negative.
-    // Instead, do a direct update via the service-role client.
-
-    // Cancel the above — do a direct SQL update instead
-    const { error: directError } = await supabase
-      .from("user_settings")
-      .update({ credits: 0 }) // This won't work directly for increment
-      .eq("id", userId);
-
-    // Actually, we need to use a raw SQL approach for credits + 500.
-    // Let's use the Postgres function approach via rpc.
-
-    // Clean approach: use a dedicated rpc or direct SQL
-    // For now, fetch current credits and set new value
-    const { data: settings, error: fetchError } = await supabase
+    // Add 500 credits using fetch + service role (atomic increment)
+    const { data: current, error: fetchErr } = await supabase
       .from("user_settings")
       .select("credits")
       .eq("id", userId)
       .single();
 
-    if (fetchError || !settings) {
-      console.error("Error fetching user settings:", fetchError);
+    if (fetchErr || !current) {
+      console.error("Error fetching credits:", fetchErr);
       return new Response("Internal error", { status: 500 });
     }
 
-    const newCredits = settings.credits + 500;
-    const { error: setError } = await supabase
+    const { error: updateErr } = await supabase
       .from("user_settings")
-      .update({ credits: newCredits })
+      .update({ credits: current.credits + 500 })
       .eq("id", userId);
 
-    if (setError) {
-      console.error("Error updating credits:", setError);
+    if (updateErr) {
+      console.error("Error updating credits:", updateErr);
       return new Response("Internal error", { status: 500 });
     }
 
-    console.log(`Added 500 credits to user ${userId}, new balance: ${newCredits}`);
+    console.log(`Added 500 credits to user ${userId}, new balance: ${current.credits + 500}`);
     return new Response("OK", { status: 200 });
   } catch (err) {
     console.error("paddle-webhook error:", err);
