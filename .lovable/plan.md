@@ -1,44 +1,91 @@
 
 
-# Paddle Compliance Pages — Execution Plan
+# Paddle Integration — Execution Plan
 
 ## Overview
-Create a Footer component, Pricing page, and 3 legal pages with full provided content. Add public routes. No authentication required for any of these pages.
+Rename the Polar events table, create two edge functions (checkout + webhook), add frontend Paddle service, and wire "Buy 500 Credits" buttons on Dashboard and Pricing pages. The checkout edge function fetches `PADDLE_PRICE_ID` from environment — never from the client.
 
-## Files to Create (5)
+## 1. Database Migration
 
-### 1. `src/components/Footer.tsx`
-Minimalist footer with `Link` components to `/pricing`, `/terms-and-conditions`, `/privacy`, `/refund`. Centered, subtle text styling.
+```sql
+ALTER TABLE public.processed_polar_events RENAME TO processed_paddle_events;
+```
 
-### 2. `src/pages/PricingPage.tsx`
-Public page with centered layout, single pricing card for "500 Mileage Credits" with placeholder "Buy Credits" button. Footer at bottom.
+Existing RLS policy (service_role only) carries over.
 
-### 3. `src/pages/TermsPage.tsx`
-Full Terms of Service content (Turkish then English) with proper Tailwind typography: `text-2xl font-bold mb-4` for main headings, `text-xl font-semibold mt-6 mb-2` for subheadings, `mb-4 text-gray-700` for paragraphs. Max-width readable container. Footer at bottom.
+## 2. Secrets Required (3)
 
-### 4. `src/pages/PrivacyPage.tsx`
-Same layout as Terms, with full Privacy Policy content (Turkish then English). Footer at bottom.
+Before edge functions work, three secrets must be provided:
+- **PADDLE_API_KEY** — Paddle Billing API key
+- **PADDLE_WEBHOOK_SECRET** — Paddle webhook signing secret
+- **PADDLE_PRICE_ID** — The Paddle Price ID for the 500-credit product (fetched server-side only, never from client)
 
-### 5. `src/pages/RefundPage.tsx`
-Same layout as Terms, with full Refund Policy content (Turkish then English). Footer at bottom.
+## 3. `supabase/config.toml`
 
-## Files to Modify (2)
+Add webhook function config to disable JWT verification:
+```toml
+[functions.paddle-webhook]
+verify_jwt = false
+```
 
-### 6. `src/pages/AuthPage.tsx`
-Add `<Footer />` import and render it at the bottom of the page (inside the outer div, after the Card).
+## 4. `supabase/functions/paddle-checkout/index.ts` (Create)
 
-### 7. `src/App.tsx`
-Add 4 new public routes (outside ProtectedRoute):
-- `/pricing` → PricingPage
-- `/terms-and-conditions` → TermsPage
-- `/privacy` → PrivacyPage
-- `/refund` → RefundPage
+- CORS + OPTIONS handler
+- Extract `user_id` from JWT via `getClaims()`
+- Read `PADDLE_PRICE_ID` from `Deno.env.get('PADDLE_PRICE_ID')` — **not** from request body
+- POST to `https://api.paddle.com/transactions` with `PADDLE_API_KEY`
+- Pass `user_id` in `custom_data`, use server-side price ID in `items`
+- Return transaction details / checkout URL
 
-Import all 4 new page components.
+## 5. `supabase/functions/paddle-webhook/index.ts` (Create)
 
-## Technical Notes
-- All legal text embedded directly as JSX — no placeholders
-- All new pages are public (no auth wrapper)
-- Footer uses `react-router-dom` `Link` for client-side navigation
-- Legal pages use `max-w-3xl mx-auto` for readable width
+- Verify `Paddle-Signature` header using `PADDLE_WEBHOOK_SECRET` (HMAC-SHA256 over `ts:rawBody`)
+- Filter for `transaction.completed` event only
+- **Idempotency**: INSERT event ID into `processed_paddle_events`; on unique conflict → return 200
+- Extract `user_id` from `data.custom_data.user_id`
+- Service-role client: `UPDATE user_settings SET credits = credits + 500 WHERE id = user_id`
+- Return 200 OK
+
+## 6. `src/services/paddle.ts` (Create)
+
+```typescript
+import { supabase } from "@/integrations/supabase/client";
+
+export const createCheckout = async () => {
+  const { data, error } = await supabase.functions.invoke("paddle-checkout");
+  if (error) throw error;
+  return data;
+};
+```
+
+No price ID or product ID sent from client — the function takes no body parameters.
+
+## 7. `src/pages/Dashboard.tsx` (Update)
+
+- Add "Buy 500 Credits" button next to the Credits card
+- On click: loading state → `createCheckout()` → open checkout URL
+- Error handling via toast
+
+## 8. `src/pages/PricingPage.tsx` (Update)
+
+- Wire the "Buy Credits" button to call `createCheckout()` (requires auth; redirect to `/` if not logged in)
+- Replace the disabled placeholder button
+
+## Files Summary
+
+| File | Action |
+|------|--------|
+| Migration SQL | Rename `processed_polar_events` → `processed_paddle_events` |
+| `supabase/config.toml` | Add `[functions.paddle-webhook]` block |
+| `supabase/functions/paddle-checkout/index.ts` | Create |
+| `supabase/functions/paddle-webhook/index.ts` | Create |
+| `src/services/paddle.ts` | Create |
+| `src/pages/Dashboard.tsx` | Add buy button |
+| `src/pages/PricingPage.tsx` | Wire buy button |
+
+## Security Notes
+- `PADDLE_PRICE_ID` is **never** accepted from the client — fetched exclusively via `Deno.env.get()` in the checkout edge function
+- Webhook signature verified before any processing
+- Credits added via service-role client (bypasses the `prevent_credits_tampering` trigger correctly)
+- Idempotency check prevents double-crediting from replayed webhooks
 
