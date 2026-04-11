@@ -111,21 +111,31 @@ async function getUserIdFromAuth(req: Request): Promise<string> {
   return data.claims.sub as string;
 }
 
+async function getUserPat(userId: string): Promise<string> {
+  const serviceClient = getServiceClient();
+  const { data, error } = await serviceClient
+    .from("user_settings")
+    .select("airtable_pat")
+    .eq("id", userId)
+    .single();
+
+  if (error || !data?.airtable_pat) {
+    throw new Error("No Airtable PAT configured. Please add it in Settings.");
+  }
+  return data.airtable_pat;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
+    const userId = await getUserIdFromAuth(req);
     const body = await req.json();
-    const { action, pat, baseId, tableId, distanceFieldId, limit, records } = body;
+    const { action, baseId, tableId, distanceFieldId, limit, records } = body;
 
-    if (!pat) {
-      return new Response(JSON.stringify({ error: "Missing PAT" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    const pat = await getUserPat(userId);
 
     let result: unknown;
 
@@ -156,11 +166,8 @@ serve(async (req) => {
           throw new Error("Missing sync params");
         }
 
-        // Extract user_id from JWT — never trust request body
-        const userId = await getUserIdFromAuth(req);
         const serviceClient = getServiceClient();
 
-        // Check credits
         const { data: settings, error: settingsErr } = await serviceClient
           .from("user_settings")
           .select("credits")
@@ -184,10 +191,8 @@ serve(async (req) => {
           );
         }
 
-        // Run existing batching
         const syncResult = await syncWithBatching(pat, baseId, tableId, distanceFieldId, records);
 
-        // Deduct credits atomically for successfully synced records
         if (syncResult.synced > 0) {
           const { data: newBalance, error: deductErr } = await serviceClient.rpc(
             "deduct_credits",

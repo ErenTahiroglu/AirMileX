@@ -23,8 +23,8 @@ const NewJobPage = () => {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const [pat, setPat] = useState("");
-  const [mapsKey, setMapsKey] = useState("");
+  const [hasPat, setHasPat] = useState(false);
+  const [hasMapsKey, setHasMapsKey] = useState(false);
   const [provider, setProvider] = useState("google");
 
   const [bases, setBases] = useState<AirtableBase[]>([]);
@@ -47,39 +47,39 @@ const NewJobPage = () => {
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState({ synced: 0, total: 0 });
 
-  // Load settings
+  // Load settings (only flags, no raw keys)
   useEffect(() => {
     if (!user) return;
     getSettings(user.id).then((s) => {
       if (s) {
-        setPat(s.airtable_pat ?? "");
-        setMapsKey(s.maps_api_key ?? "");
+        setHasPat(s.has_pat);
+        setHasMapsKey(s.has_maps_key);
         setProvider(s.maps_provider ?? "google");
       }
     });
   }, [user]);
 
-  // Load bases when pat ready
+  // Load bases when pat exists
   useEffect(() => {
-    if (!pat) return;
+    if (!hasPat) return;
     setLoadingBases(true);
-    listBases(pat)
+    listBases()
       .then((data) => setBases(data.bases ?? []))
       .catch((e) => toast({ title: "Error loading bases", description: e.message, variant: "destructive" }))
       .finally(() => setLoadingBases(false));
-  }, [pat]);
+  }, [hasPat]);
 
   // Load tables on base select
   useEffect(() => {
-    if (!pat || !selectedBase) return;
+    if (!hasPat || !selectedBase) return;
     setLoadingTables(true);
     setSelectedTable("");
     setFields([]);
-    listTables(pat, selectedBase)
+    listTables(selectedBase)
       .then((data) => setTables(data.tables ?? []))
       .catch((e) => toast({ title: "Error loading tables", description: e.message, variant: "destructive" }))
       .finally(() => setLoadingTables(false));
-  }, [pat, selectedBase]);
+  }, [hasPat, selectedBase]);
 
   // On table select: load fields + check saved mappings
   useEffect(() => {
@@ -113,7 +113,7 @@ const NewJobPage = () => {
     if (!distanceCol) return;
     setLoadingPreview(true);
     try {
-      const data = await readRecords(pat, selectedBase, selectedTable, distanceCol, 5);
+      const data = await readRecords(selectedBase, selectedTable, distanceCol, 5);
       setPreview(data.records ?? []);
       setDistances([]);
     } catch (e: unknown) {
@@ -136,7 +136,7 @@ const NewJobPage = () => {
         end: String(r.fields[endField] ?? ""),
       }));
 
-      const result = await calculateDistances(provider, mapsKey, pairs);
+      const result = await calculateDistances(pairs);
       setDistances(result.results ?? []);
       toast({ title: "Distances calculated" });
     } catch (e: unknown) {
@@ -160,7 +160,6 @@ const NewJobPage = () => {
       }));
 
       const result = await syncRecords({
-        pat,
         baseId: selectedBase,
         tableId: selectedTable,
         distanceFieldId: distField,
@@ -196,7 +195,7 @@ const NewJobPage = () => {
     }
   };
 
-  const noSettings = !pat;
+  const noSettings = !hasPat;
 
   return (
     <div className="min-h-screen bg-background">

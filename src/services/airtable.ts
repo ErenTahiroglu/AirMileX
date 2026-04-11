@@ -12,26 +12,24 @@ const callProxy = async (action: string, payload: Record<string, unknown> | obje
   return response.data;
 };
 
-export const testConnection = (pat: string) =>
-  callProxy("whoami", { pat });
+export const testConnection = () =>
+  callProxy("whoami", {});
 
-export const listBases = (pat: string) =>
-  callProxy("list-bases", { pat });
+export const listBases = () =>
+  callProxy("list-bases", {});
 
-export const listTables = (pat: string, baseId: string) =>
-  callProxy("list-tables", { pat, baseId });
+export const listTables = (baseId: string) =>
+  callProxy("list-tables", { baseId });
 
 export const readRecords = (
-  pat: string,
   baseId: string,
   tableId: string,
   distanceFieldId: string,
   limit = 5
 ) =>
-  callProxy("read-records", { pat, baseId, tableId, distanceFieldId, limit });
+  callProxy("read-records", { baseId, tableId, distanceFieldId, limit });
 
 export interface SyncPayload {
-  pat: string;
   baseId: string;
   tableId: string;
   distanceFieldId: string;

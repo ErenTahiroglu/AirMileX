@@ -125,6 +125,16 @@ export type Database = {
         Args: { p_amount: number; p_user_id: string }
         Returns: number
       }
+      get_settings_flags: {
+        Args: { p_user_id: string }
+        Returns: {
+          credits: number
+          has_maps_key: boolean
+          has_pat: boolean
+          id: string
+          maps_provider: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
