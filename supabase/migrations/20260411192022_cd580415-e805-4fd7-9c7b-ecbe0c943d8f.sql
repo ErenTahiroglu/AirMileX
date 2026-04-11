@@ -1,0 +1,1 @@
+ALTER TABLE public.processed_polar_events RENAME TO processed_paddle_events;
