@@ -26,11 +26,9 @@ const SettingsPage = () => {
     if (!user) return;
     getSettings(user.id).then((s) => {
       if (s) {
-        setPat(s.airtable_pat ?? "");
-        setMapsKey(s.maps_api_key ?? "");
         setProvider(s.maps_provider ?? "google");
-        setHasPat(!!s.airtable_pat);
-        setHasMapsKey(!!s.maps_api_key);
+        setHasPat(s.has_pat);
+        setHasMapsKey(s.has_maps_key);
       }
     });
   }, [user]);
@@ -39,14 +37,25 @@ const SettingsPage = () => {
     if (!user) return;
     setSaving(true);
     try {
-      await upsertSettings({
+      const payload: {
+        id: string;
+        airtable_pat?: string | null;
+        maps_api_key?: string | null;
+        maps_provider?: string | null;
+      } = {
         id: user.id,
-        airtable_pat: pat || null,
-        maps_api_key: mapsKey || null,
         maps_provider: provider,
-      });
-      setHasPat(!!pat);
-      setHasMapsKey(!!mapsKey);
+      };
+
+      // Only send keys if user typed a new value
+      if (pat) payload.airtable_pat = pat;
+      if (mapsKey) payload.maps_api_key = mapsKey;
+
+      await upsertSettings(payload);
+      if (pat) setHasPat(true);
+      if (mapsKey) setHasMapsKey(true);
+      setPat("");
+      setMapsKey("");
       toast({ title: "Saved", description: "Settings updated." });
     } catch (err: unknown) {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
@@ -56,10 +65,9 @@ const SettingsPage = () => {
   };
 
   const handleTest = async () => {
-    if (!pat) return;
     setTesting(true);
     try {
-      const result = await testConnection(pat);
+      const result = await testConnection();
       toast({ title: "Connected", description: `Authenticated as ${result.email || "user"}.` });
     } catch (err: unknown) {
       toast({ title: "Connection Failed", description: (err as Error).message, variant: "destructive" });
@@ -86,17 +94,17 @@ const SettingsPage = () => {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Label htmlFor="pat">Personal Access Token</Label>
-                {hasPat && <Badge variant="outline" className="text-xs border-success text-success-foreground">Active</Badge>}
+                {hasPat && <Badge variant="outline" className="text-xs border-success text-success-foreground">Saved (Hidden)</Badge>}
               </div>
               <Input
                 id="pat"
                 type="password"
                 value={pat}
                 onChange={(e) => setPat(e.target.value)}
-                placeholder="pat..."
+                placeholder={hasPat ? "Enter new token to replace" : "pat..."}
               />
             </div>
-            <Button variant="outline" size="sm" onClick={handleTest} disabled={testing || !pat}>
+            <Button variant="outline" size="sm" onClick={handleTest} disabled={testing || !hasPat}>
               {testing ? "Testing..." : "Test Connection"}
             </Button>
           </CardContent>
@@ -120,14 +128,14 @@ const SettingsPage = () => {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Label htmlFor="mapsKey">API Key</Label>
-                {hasMapsKey && <Badge variant="outline" className="text-xs border-success text-success-foreground">Active</Badge>}
+                {hasMapsKey && <Badge variant="outline" className="text-xs border-success text-success-foreground">Saved (Hidden)</Badge>}
               </div>
               <Input
                 id="mapsKey"
                 type="password"
                 value={mapsKey}
                 onChange={(e) => setMapsKey(e.target.value)}
-                placeholder="Your API key"
+                placeholder={hasMapsKey ? "Enter new key to replace" : "Your API key"}
               />
             </div>
           </CardContent>

@@ -15,15 +15,13 @@ export interface DistanceResult {
 }
 
 export const calculateDistances = async (
-  provider: string,
-  apiKey: string,
   pairs: AddressPair[]
 ): Promise<{ results: DistanceResult[] }> => {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Not authenticated");
 
   const response = await supabase.functions.invoke("distance-proxy", {
-    body: { provider, api_key: apiKey, pairs },
+    body: { pairs },
   });
 
   if (response.error) throw new Error(response.error.message);
