@@ -44,7 +44,7 @@ export type Database = {
         }
         Relationships: []
       }
-      processed_polar_events: {
+      processed_paddle_events: {
         Row: {
           created_at: string
           id: string
