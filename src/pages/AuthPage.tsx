@@ -44,6 +44,20 @@ const AuthPage = () => {
     navigate("/dashboard");
   };
 
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    const result = await lovable.auth.signInWithOAuth("google", {
+      redirect_uri: window.location.origin,
+    });
+    if (result.error) {
+      toast({ title: "Error", description: (result.error as Error).message, variant: "destructive" });
+      setGoogleLoading(false);
+      return;
+    }
+    if (result.redirected) return;
+    navigate("/dashboard");
+  
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <div className="flex-1 flex items-center justify-center px-4 py-12">
