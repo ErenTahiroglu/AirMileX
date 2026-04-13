@@ -56,7 +56,7 @@ const AuthPage = () => {
     }
     if (result.redirected) return;
     navigate("/dashboard");
-  
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
