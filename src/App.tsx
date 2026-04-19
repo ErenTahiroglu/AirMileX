@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { SessionTimeoutWatcher } from "@/components/SessionTimeoutWatcher";
 import AuthPage from "./pages/AuthPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import Dashboard from "./pages/Dashboard";
@@ -32,6 +33,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <AuthProvider>
+          <SessionTimeoutWatcher />
           <Routes>
             <Route path="/" element={<AuthRedirect />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
