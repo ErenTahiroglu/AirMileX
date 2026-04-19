@@ -1,24 +1,39 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 import { getSettings, upsertSettings } from "@/services/settings";
 import { testConnection } from "@/services/airtable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { LogOut } from "lucide-react";
 
 const SettingsPage = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [pat, setPat] = useState("");
   const [mapsKey, setMapsKey] = useState("");
   const [provider, setProvider] = useState<string>("google");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
 
@@ -74,6 +89,19 @@ const SettingsPage = () => {
     } finally {
       setTesting(false);
     }
+  };
+
+  const handleSignOutEverywhere = async () => {
+    setSigningOut(true);
+    // scope: 'global' revokes all refresh tokens for this user across all devices
+    const { error } = await supabase.auth.signOut({ scope: "global" });
+    setSigningOut(false);
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({ title: "Signed out everywhere", description: "All your sessions have been ended." });
+    navigate("/", { replace: true });
   };
 
   return (
@@ -144,6 +172,42 @@ const SettingsPage = () => {
         <Button onClick={handleSave} disabled={saving} className="w-full">
           {saving ? "Saving..." : "Save Settings"}
         </Button>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Security</CardTitle>
+            <CardDescription>Manage your account sessions across all devices.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" className="w-full">
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Sign out everywhere
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Sign out of all sessions?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will end your session on every device where you're currently signed in,
+                    including this one. You'll need to sign in again to continue.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={signingOut}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleSignOutEverywhere}
+                    disabled={signingOut}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {signingOut ? "Signing out..." : "Sign out everywhere"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </CardContent>
+        </Card>
       </main>
     </div>
   );
