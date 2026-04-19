@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
-const WARNING_BEFORE_MS = 60 * 1000; // 1 minute before expiry
+const WARNING_BEFORE_MS = 5 * 60 * 1000; // 5 minutes before expiry (temporary, for testing)
 
 /**
  * Watches the auth session and shows a warning toast 1 minute before it expires,
@@ -33,7 +33,7 @@ export const SessionTimeoutWatcher = () => {
     if (msUntilWarning > 0) {
       warningTimerRef.current = window.setTimeout(() => {
         shownForRef.current = session.expires_at ?? null;
-        toast.warning("Your session expires in 1 minute", {
+        toast.warning("Your session expires in 5 minutes", {
           description: "Stay signed in to keep working without interruption.",
           duration: 60_000,
           action: {
