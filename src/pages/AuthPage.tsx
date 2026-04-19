@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import Footer from "@/components/Footer";
 import PasswordStrength from "@/components/PasswordStrength";
+import { friendlyAuthError } from "@/lib/authErrors";
 import { MapPin, Zap, FileText } from "lucide-react";
 
 const AuthPage = () => {
@@ -34,7 +35,8 @@ const AuthPage = () => {
     setLoading(false);
 
     if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      const friendly = friendlyAuthError(error);
+      toast({ title: friendly.title, description: friendly.description, variant: "destructive" });
       return;
     }
 
@@ -52,7 +54,8 @@ const AuthPage = () => {
       redirect_uri: window.location.origin,
     });
     if (result.error) {
-      toast({ title: "Error", description: (result.error as Error).message, variant: "destructive" });
+      const friendly = friendlyAuthError(result.error);
+      toast({ title: friendly.title, description: friendly.description, variant: "destructive" });
       setGoogleLoading(false);
       return;
     }
@@ -69,7 +72,8 @@ const AuthPage = () => {
       redirectTo: `${window.location.origin}/reset-password`,
     });
     if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      const friendly = friendlyAuthError(error);
+      toast({ title: friendly.title, description: friendly.description, variant: "destructive" });
       return;
     }
     toast({ title: "Check your email", description: "We sent you a password reset link." });
