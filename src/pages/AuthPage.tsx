@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { lovable } from "@/integrations/lovable/index";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import Footer from "@/components/Footer";
+import PasswordStrength from "@/components/PasswordStrength";
 import { MapPin, Zap, FileText } from "lucide-react";
 
 const AuthPage = () => {
@@ -58,6 +60,20 @@ const AuthPage = () => {
     navigate("/dashboard");
   };
 
+  const handleForgotPassword = async () => {
+    if (!email) {
+      toast({ title: "Enter your email", description: "Type your email above first, then click forgot password.", variant: "destructive" });
+      return;
+    }
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({ title: "Check your email", description: "We sent you a password reset link." });
+  };
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <div className="flex-1 flex items-center justify-center px-4 py-12">
@@ -137,7 +153,17 @@ const AuthPage = () => {
                     minLength={6}
                     placeholder="••••••••"
                   />
+                  {!isLogin && <PasswordStrength password={password} />}
                 </div>
+                {isLogin && (
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="text-xs text-muted-foreground hover:text-foreground underline-offset-4 hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                )}
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? "Loading..." : isLogin ? "Sign In" : "Sign Up"}
                 </Button>

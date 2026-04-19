@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import AuthPage from "./pages/AuthPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 import Dashboard from "./pages/Dashboard";
 import SettingsPage from "./pages/SettingsPage";
 import NewJobPage from "./pages/NewJobPage";
@@ -33,6 +34,7 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route path="/" element={<AuthRedirect />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/terms-and-conditions" element={<TermsPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
