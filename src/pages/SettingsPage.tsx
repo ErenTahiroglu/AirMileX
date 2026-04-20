@@ -35,7 +35,11 @@ const SettingsPage = () => {
   const [testing, setTesting] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteStep, setDeleteStep] = useState<"confirm" | "verify">("confirm");
   const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
 
