@@ -22,7 +22,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { LogOut } from "lucide-react";
+import { LogOut, Trash2 } from "lucide-react";
 
 const SettingsPage = () => {
   const { user } = useAuth();
@@ -34,6 +34,8 @@ const SettingsPage = () => {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
 
@@ -102,6 +104,22 @@ const SettingsPage = () => {
     }
     toast({ title: "Signed out everywhere", description: "All your sessions have been ended." });
     navigate("/", { replace: true });
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      const { error } = await supabase.functions.invoke("delete-account");
+      if (error) throw error;
+      await supabase.auth.signOut({ scope: "global" });
+      toast({ title: "Account deleted", description: "Your account and data have been removed." });
+      navigate("/", { replace: true });
+    } catch (err: unknown) {
+      toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+      setDeleteConfirm("");
+    }
   };
 
   return (
@@ -176,9 +194,9 @@ const SettingsPage = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Security</CardTitle>
-            <CardDescription>Manage your account sessions across all devices.</CardDescription>
+            <CardDescription>Manage your sessions or permanently delete your account.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" className="w-full">
@@ -202,6 +220,42 @@ const SettingsPage = () => {
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
                     {signingOut ? "Signing out..." : "Sign out everywhere"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog onOpenChange={(open) => { if (!open) setDeleteConfirm(""); }}>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" className="w-full">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete account
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete your account, settings, saved mappings, and
+                    calculation history. This action cannot be undone.
+                    <br /><br />
+                    Type <strong>DELETE</strong> to confirm.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <Input
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder="DELETE"
+                  autoComplete="off"
+                />
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDeleteAccount}
+                    disabled={deleting || deleteConfirm !== "DELETE"}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleting ? "Deleting..." : "Delete forever"}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
