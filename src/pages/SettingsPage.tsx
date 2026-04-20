@@ -106,6 +106,22 @@ const SettingsPage = () => {
     navigate("/", { replace: true });
   };
 
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      const { error } = await supabase.functions.invoke("delete-account");
+      if (error) throw error;
+      await supabase.auth.signOut({ scope: "global" });
+      toast({ title: "Account deleted", description: "Your account and data have been removed." });
+      navigate("/", { replace: true });
+    } catch (err: unknown) {
+      toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+      setDeleteConfirm("");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border">
