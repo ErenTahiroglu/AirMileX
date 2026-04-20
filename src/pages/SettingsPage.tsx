@@ -194,7 +194,7 @@ const SettingsPage = () => {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Security</CardTitle>
-            <CardDescription>Manage your account sessions across all devices.</CardDescription>
+            <CardDescription>Manage your sessions or permanently delete your account.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <AlertDialog>
