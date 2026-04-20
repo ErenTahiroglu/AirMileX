@@ -196,7 +196,7 @@ const SettingsPage = () => {
             <CardTitle className="text-base">Security</CardTitle>
             <CardDescription>Manage your account sessions across all devices.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" className="w-full">
@@ -220,6 +220,42 @@ const SettingsPage = () => {
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
                     {signingOut ? "Signing out..." : "Sign out everywhere"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog onOpenChange={(open) => { if (!open) setDeleteConfirm(""); }}>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" className="w-full">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete account
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete your account, settings, saved mappings, and
+                    calculation history. This action cannot be undone.
+                    <br /><br />
+                    Type <strong>DELETE</strong> to confirm.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <Input
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder="DELETE"
+                  autoComplete="off"
+                />
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDeleteAccount}
+                    disabled={deleting || deleteConfirm !== "DELETE"}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleting ? "Deleting..." : "Delete forever"}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
