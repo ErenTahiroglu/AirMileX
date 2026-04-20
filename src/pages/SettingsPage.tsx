@@ -22,7 +22,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { LogOut, Trash2 } from "lucide-react";
+import { LogOut, Trash2, Download } from "lucide-react";
 
 const SettingsPage = () => {
   const { user } = useAuth();
@@ -35,7 +35,11 @@ const SettingsPage = () => {
   const [testing, setTesting] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteStep, setDeleteStep] = useState<"confirm" | "verify">("confirm");
   const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
 
@@ -106,9 +110,76 @@ const SettingsPage = () => {
     navigate("/", { replace: true });
   };
 
+  const handleExportData = async () => {
+    if (!user) return;
+    setExporting(true);
+    try {
+      const [settings, mappings, logs] = await Promise.all([
+        supabase.from("user_settings").select("*").eq("id", user.id).maybeSingle(),
+        supabase.from("saved_mappings").select("*").eq("user_id", user.id),
+        supabase.from("calculation_logs").select("*").eq("user_id", user.id),
+      ]);
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        user: { id: user.id, email: user.email },
+        settings: settings.data
+          ? { ...settings.data, airtable_pat: undefined, maps_api_key: undefined }
+          : null,
+        saved_mappings: mappings.data ?? [],
+        calculation_logs: logs.data ?? [],
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `airmilex-data-${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({ title: "Data exported", description: "Your data has been downloaded." });
+    } catch (err: unknown) {
+      toast({ title: "Export failed", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleSendDeleteCode = async () => {
+    if (!user?.email) return;
+    setSendingCode(true);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: user.email,
+        options: { shouldCreateUser: false },
+      });
+      if (error) throw error;
+      setDeleteStep("verify");
+      toast({
+        title: "Code sent",
+        description: `We sent a 6-digit code to ${user.email}. Enter it to confirm deletion.`,
+      });
+    } catch (err: unknown) {
+      toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setSendingCode(false);
+    }
+  };
+
   const handleDeleteAccount = async () => {
+    if (!user?.email) return;
     setDeleting(true);
     try {
+      const { error: verifyError } = await supabase.auth.verifyOtp({
+        email: user.email,
+        token: otpCode.trim(),
+        type: "email",
+      });
+      if (verifyError) throw new Error("Invalid or expired code. Please try again.");
+
       const { error } = await supabase.functions.invoke("delete-account");
       if (error) throw error;
       await supabase.auth.signOut({ scope: "global" });
@@ -118,8 +189,13 @@ const SettingsPage = () => {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
     } finally {
       setDeleting(false);
-      setDeleteConfirm("");
     }
+  };
+
+  const resetDeleteDialog = () => {
+    setDeleteStep("confirm");
+    setDeleteConfirm("");
+    setOtpCode("");
   };
 
   return (
@@ -225,7 +301,17 @@ const SettingsPage = () => {
               </AlertDialogContent>
             </AlertDialog>
 
-            <AlertDialog onOpenChange={(open) => { if (!open) setDeleteConfirm(""); }}>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={handleExportData}
+              disabled={exporting}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {exporting ? "Exporting..." : "Export my data (JSON)"}
+            </Button>
+
+            <AlertDialog onOpenChange={(open) => { if (!open) resetDeleteDialog(); }}>
               <AlertDialogTrigger asChild>
                 <Button variant="destructive" className="w-full">
                   <Trash2 className="mr-2 h-4 w-4" />
@@ -233,31 +319,70 @@ const SettingsPage = () => {
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will permanently delete your account, settings, saved mappings, and
-                    calculation history. This action cannot be undone.
-                    <br /><br />
-                    Type <strong>DELETE</strong> to confirm.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <Input
-                  value={deleteConfirm}
-                  onChange={(e) => setDeleteConfirm(e.target.value)}
-                  placeholder="DELETE"
-                  autoComplete="off"
-                />
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleDeleteAccount}
-                    disabled={deleting || deleteConfirm !== "DELETE"}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    {deleting ? "Deleting..." : "Delete forever"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
+                {deleteStep === "confirm" ? (
+                  <>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This will permanently delete your account, settings, saved mappings, and
+                        calculation history. This action cannot be undone.
+                        <br /><br />
+                        We strongly recommend exporting your data first. Type <strong>DELETE</strong>{" "}
+                        to continue — we'll then email a 6-digit code to confirm.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <Input
+                      value={deleteConfirm}
+                      onChange={(e) => setDeleteConfirm(e.target.value)}
+                      placeholder="DELETE"
+                      autoComplete="off"
+                    />
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={sendingCode}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleSendDeleteCode();
+                        }}
+                        disabled={sendingCode || deleteConfirm !== "DELETE"}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {sendingCode ? "Sending code..." : "Send confirmation code"}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </>
+                ) : (
+                  <>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Enter confirmation code</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        We sent a 6-digit code to <strong>{user?.email}</strong>. Enter it below to
+                        permanently delete your account.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <Input
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="123456"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                    />
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleDeleteAccount();
+                        }}
+                        disabled={deleting || otpCode.length !== 6}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {deleting ? "Deleting..." : "Delete forever"}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </>
+                )}
               </AlertDialogContent>
             </AlertDialog>
           </CardContent>
