@@ -301,7 +301,17 @@ const SettingsPage = () => {
               </AlertDialogContent>
             </AlertDialog>
 
-            <AlertDialog onOpenChange={(open) => { if (!open) setDeleteConfirm(""); }}>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={handleExportData}
+              disabled={exporting}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {exporting ? "Exporting..." : "Export my data (JSON)"}
+            </Button>
+
+            <AlertDialog onOpenChange={(open) => { if (!open) resetDeleteDialog(); }}>
               <AlertDialogTrigger asChild>
                 <Button variant="destructive" className="w-full">
                   <Trash2 className="mr-2 h-4 w-4" />
@@ -309,31 +319,70 @@ const SettingsPage = () => {
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will permanently delete your account, settings, saved mappings, and
-                    calculation history. This action cannot be undone.
-                    <br /><br />
-                    Type <strong>DELETE</strong> to confirm.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <Input
-                  value={deleteConfirm}
-                  onChange={(e) => setDeleteConfirm(e.target.value)}
-                  placeholder="DELETE"
-                  autoComplete="off"
-                />
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleDeleteAccount}
-                    disabled={deleting || deleteConfirm !== "DELETE"}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    {deleting ? "Deleting..." : "Delete forever"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
+                {deleteStep === "confirm" ? (
+                  <>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This will permanently delete your account, settings, saved mappings, and
+                        calculation history. This action cannot be undone.
+                        <br /><br />
+                        We strongly recommend exporting your data first. Type <strong>DELETE</strong>{" "}
+                        to continue — we'll then email a 6-digit code to confirm.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <Input
+                      value={deleteConfirm}
+                      onChange={(e) => setDeleteConfirm(e.target.value)}
+                      placeholder="DELETE"
+                      autoComplete="off"
+                    />
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={sendingCode}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleSendDeleteCode();
+                        }}
+                        disabled={sendingCode || deleteConfirm !== "DELETE"}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {sendingCode ? "Sending code..." : "Send confirmation code"}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </>
+                ) : (
+                  <>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Enter confirmation code</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        We sent a 6-digit code to <strong>{user?.email}</strong>. Enter it below to
+                        permanently delete your account.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <Input
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="123456"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                    />
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleDeleteAccount();
+                        }}
+                        disabled={deleting || otpCode.length !== 6}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {deleting ? "Deleting..." : "Delete forever"}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </>
+                )}
               </AlertDialogContent>
             </AlertDialog>
           </CardContent>
