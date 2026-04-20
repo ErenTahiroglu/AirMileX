@@ -34,6 +34,8 @@ const SettingsPage = () => {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
 
