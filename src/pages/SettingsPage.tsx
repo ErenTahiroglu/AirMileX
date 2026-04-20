@@ -110,9 +110,76 @@ const SettingsPage = () => {
     navigate("/", { replace: true });
   };
 
+  const handleExportData = async () => {
+    if (!user) return;
+    setExporting(true);
+    try {
+      const [settings, mappings, logs] = await Promise.all([
+        supabase.from("user_settings").select("*").eq("id", user.id).maybeSingle(),
+        supabase.from("saved_mappings").select("*").eq("user_id", user.id),
+        supabase.from("calculation_logs").select("*").eq("user_id", user.id),
+      ]);
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        user: { id: user.id, email: user.email },
+        settings: settings.data
+          ? { ...settings.data, airtable_pat: undefined, maps_api_key: undefined }
+          : null,
+        saved_mappings: mappings.data ?? [],
+        calculation_logs: logs.data ?? [],
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `airmilex-data-${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({ title: "Data exported", description: "Your data has been downloaded." });
+    } catch (err: unknown) {
+      toast({ title: "Export failed", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleSendDeleteCode = async () => {
+    if (!user?.email) return;
+    setSendingCode(true);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: user.email,
+        options: { shouldCreateUser: false },
+      });
+      if (error) throw error;
+      setDeleteStep("verify");
+      toast({
+        title: "Code sent",
+        description: `We sent a 6-digit code to ${user.email}. Enter it to confirm deletion.`,
+      });
+    } catch (err: unknown) {
+      toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setSendingCode(false);
+    }
+  };
+
   const handleDeleteAccount = async () => {
+    if (!user?.email) return;
     setDeleting(true);
     try {
+      const { error: verifyError } = await supabase.auth.verifyOtp({
+        email: user.email,
+        token: otpCode.trim(),
+        type: "email",
+      });
+      if (verifyError) throw new Error("Invalid or expired code. Please try again.");
+
       const { error } = await supabase.functions.invoke("delete-account");
       if (error) throw error;
       await supabase.auth.signOut({ scope: "global" });
@@ -122,8 +189,13 @@ const SettingsPage = () => {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
     } finally {
       setDeleting(false);
-      setDeleteConfirm("");
     }
+  };
+
+  const resetDeleteDialog = () => {
+    setDeleteStep("confirm");
+    setDeleteConfirm("");
+    setOtpCode("");
   };
 
   return (
