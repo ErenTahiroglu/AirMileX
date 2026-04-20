@@ -22,7 +22,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { LogOut, Trash2 } from "lucide-react";
+import { LogOut, Trash2, Download } from "lucide-react";
 
 const SettingsPage = () => {
   const { user } = useAuth();
