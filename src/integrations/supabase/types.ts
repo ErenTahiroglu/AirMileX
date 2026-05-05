@@ -14,6 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      account_deletion_attempts: {
+        Row: {
+          attempted_at: string
+          error_message: string | null
+          id: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          attempted_at?: string
+          error_message?: string | null
+          id?: string
+          status: string
+          user_id: string
+        }
+        Update: {
+          attempted_at?: string
+          error_message?: string | null
+          id?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       calculation_logs: {
         Row: {
           base_id: string
