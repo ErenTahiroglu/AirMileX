@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 import PasswordStrength from "@/components/PasswordStrength";
 import { friendlyAuthError } from "@/lib/authErrors";
 import { MapPin, Zap, FileText } from "lucide-react";
@@ -80,7 +81,12 @@ const AuthPage = () => {
   };
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <div className="flex-1 flex items-center justify-center px-4 py-12">
+      <Seo
+        title="AirMileX — Airtable Mileage Tracking & Distance Calculator"
+        description="Automate your Airtable mileage tracking. Calculate driving distances in batches and generate IRS-compliant logs with zero manual effort."
+        path="/"
+      />
+      <main className="flex-1 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-4xl grid gap-10 md:grid-cols-2 md:gap-16 items-center">
           {/* Hero / Marketing Section */}
           <div className="space-y-6 text-center md:text-left">
@@ -182,7 +188,7 @@ const AuthPage = () => {
             </CardContent>
           </Card>
         </div>
-      </div>
+      </main>
       <Footer />
     </div>
   );

@@ -1,9 +1,15 @@
 import { Link } from "react-router-dom";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 
 const TermsPage = () => (
   <div className="flex min-h-screen flex-col bg-background">
-    <div className="flex-1 px-4 py-12">
+    <Seo
+      title="Terms of Service | AirMileX"
+      description="The Terms of Service governing your use of AirMileX, available in English and Turkish."
+      path="/terms-and-conditions"
+    />
+    <main className="flex-1 px-4 py-12">
       <div className="mx-auto max-w-3xl">
         <Link to="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Back to Home</Link>
 
