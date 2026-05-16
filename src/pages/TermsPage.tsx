@@ -213,7 +213,7 @@ const TermsPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">19. Changes</h3>
         <p className="mb-4 text-muted-foreground">These Terms may be updated from time to time. The current version becomes effective when published on the website.</p>
       </div>
-    </div>
+    </main>
     <Footer />
   </div>
 );

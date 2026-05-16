@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 import PasswordStrength from "@/components/PasswordStrength";
 
 const ResetPasswordPage = () => {
@@ -59,7 +60,13 @@ const ResetPasswordPage = () => {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <div className="flex-1 flex items-center justify-center px-4 py-12">
+      <Seo
+        title="Reset Password | AirMileX"
+        description="Set a new password for your AirMileX account."
+        path="/reset-password"
+        noindex
+      />
+      <main className="flex-1 flex items-center justify-center px-4 py-12">
         <Card className="w-full max-w-sm">
           <CardHeader className="text-center">
             <CardTitle className="text-xl">Reset your password</CardTitle>
@@ -104,7 +111,7 @@ const ResetPasswordPage = () => {
             </form>
           </CardContent>
         </Card>
-      </div>
+      </main>
       <Footer />
     </div>
   );

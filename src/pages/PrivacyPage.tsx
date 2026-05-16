@@ -1,9 +1,15 @@
 import { Link } from "react-router-dom";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 
 const PrivacyPage = () => (
   <div className="flex min-h-screen flex-col bg-background">
-    <div className="flex-1 px-4 py-12">
+    <Seo
+      title="Privacy Policy | AirMileX"
+      description="How AirMileX collects, processes, shares, and protects personal data. Available in English and Turkish."
+      path="/privacy"
+    />
+    <main className="flex-1 px-4 py-12">
       <div className="mx-auto max-w-3xl">
         <Link to="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Back to Home</Link>
 
@@ -125,7 +131,7 @@ const PrivacyPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">14. Changes</h3>
         <p className="mb-4 text-muted-foreground">This Policy may be updated. The current version is effective upon website publication.</p>
       </div>
-    </div>
+    </main>
     <Footer />
   </div>
 );
