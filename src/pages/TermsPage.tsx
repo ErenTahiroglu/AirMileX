@@ -1,9 +1,15 @@
 import { Link } from "react-router-dom";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 
 const TermsPage = () => (
   <div className="flex min-h-screen flex-col bg-background">
-    <div className="flex-1 px-4 py-12">
+    <Seo
+      title="Terms of Service | AirMileX"
+      description="The Terms of Service governing your use of AirMileX, available in English and Turkish."
+      path="/terms-and-conditions"
+    />
+    <main className="flex-1 px-4 py-12">
       <div className="mx-auto max-w-3xl">
         <Link to="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Back to Home</Link>
 
@@ -207,7 +213,7 @@ const TermsPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">19. Changes</h3>
         <p className="mb-4 text-muted-foreground">These Terms may be updated from time to time. The current version becomes effective when published on the website.</p>
       </div>
-    </div>
+    </main>
     <Footer />
   </div>
 );

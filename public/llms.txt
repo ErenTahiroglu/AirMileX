@@ -1,0 +1,13 @@
+# AirMileX
+
+> Automate mileage tracking by connecting Airtable to mapping providers (Google Maps, OpenRouteService) and generating accurate driving-distance reports.
+
+AirMileX is a web app that reads address columns from an Airtable base, calculates driving distances in batches, writes results back to the base, and produces audit-ready mileage logs. Pricing is one-time credit packs.
+
+## Pages
+
+- [Home](/): Product overview and sign-in/sign-up.
+- [Pricing](/pricing): One-time credit pack — 500 mileage credits for $9.
+- [Terms of Service](/terms-and-conditions): User agreement (English and Turkish).
+- [Privacy Policy](/privacy): Data handling and user rights (English and Turkish).
+- [Refund Policy](/refund): 30-day money-back guarantee details.

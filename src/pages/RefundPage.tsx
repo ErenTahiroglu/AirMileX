@@ -1,9 +1,15 @@
 import { Link } from "react-router-dom";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 
 const RefundPage = () => (
   <div className="flex min-h-screen flex-col bg-background">
-    <div className="flex-1 px-4 py-12">
+    <Seo
+      title="Refund Policy | AirMileX"
+      description="AirMileX refund rules, including the 30-day money-back guarantee. Available in English and Turkish."
+      path="/refund"
+    />
+    <main className="flex-1 px-4 py-12">
       <div className="mx-auto max-w-3xl">
         <Link to="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Back to Home</Link>
 
@@ -95,7 +101,7 @@ const RefundPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">9. Chargebacks</h3>
         <p className="mb-4 text-muted-foreground">Users are expected to try resolving the issue directly with us first. If a chargeback is initiated, relevant transaction info may be provided to Paddle and payment institutions.</p>
       </div>
-    </div>
+    </main>
     <Footer />
   </div>
 );

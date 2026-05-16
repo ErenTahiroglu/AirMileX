@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { createCheckout } from "@/services/paddle";
 import { useToast } from "@/hooks/use-toast";
 import Footer from "@/components/Footer";
+import Seo from "@/components/Seo";
 
 const PricingPage = () => {
   const { user } = useAuth();
@@ -35,7 +36,27 @@ const PricingPage = () => {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <div className="flex-1 px-4 py-16">
+      <Seo
+        title="Pricing | AirMileX — 500 Mileage Credits for $9"
+        description="Simple, transparent pricing. Buy 500 mileage credits for a one-time $9. Airtable integration, multiple map providers, saved column mappings."
+        path="/pricing"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          name: "AirMileX",
+          applicationCategory: "BusinessApplication",
+          operatingSystem: "Web",
+          description: "Automated Airtable mileage tracking and driving-distance calculator.",
+          offers: {
+            "@type": "Offer",
+            price: "9.00",
+            priceCurrency: "USD",
+            name: "500 Mileage Credits",
+            url: "https://airmilex.lovable.app/pricing",
+          },
+        }}
+      />
+      <main className="flex-1 px-4 py-16">
         <div className="mx-auto max-w-md text-center">
           <Link to="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Back to Home</Link>
           <h1 className="mt-6 text-3xl font-bold tracking-tight">Pricing</h1>
@@ -60,7 +81,7 @@ const PricingPage = () => {
             </CardContent>
           </Card>
         </div>
-      </div>
+      </main>
       <Footer />
     </div>
   );
