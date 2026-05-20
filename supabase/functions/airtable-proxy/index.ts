@@ -168,48 +168,51 @@ serve(async (req) => {
 
         const serviceClient = getServiceClient();
 
-        const { data: settings, error: settingsErr } = await serviceClient
-          .from("user_settings")
-          .select("credits")
-          .eq("id", userId)
-          .single();
+        // Atomically reserve credits up-front to prevent TOCTOU race
+        const { data: reservedBalance, error: reserveErr } = await serviceClient.rpc(
+          "reserve_credits",
+          { p_user_id: userId, p_amount: records.length }
+        );
 
-        if (settingsErr || !settings) {
-          throw new Error("Could not fetch user settings");
-        }
-
-        if (settings.credits < records.length) {
-          return new Response(
-            JSON.stringify({
-              error: "Insufficient credits",
-              credits_available: settings.credits,
-            }),
-            {
-              status: 402,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            }
-          );
+        if (reserveErr) {
+          const msg = reserveErr.message || "";
+          if (msg.includes("Insufficient credits")) {
+            const { data: cur } = await serviceClient
+              .from("user_settings")
+              .select("credits")
+              .eq("id", userId)
+              .single();
+            return new Response(
+              JSON.stringify({
+                error: "Insufficient credits",
+                credits_available: cur?.credits ?? 0,
+              }),
+              {
+                status: 402,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+              }
+            );
+          }
+          throw new Error(`Credit reservation failed: ${msg}`);
         }
 
         const syncResult = await syncWithBatching(pat, baseId, tableId, distanceFieldId, records);
+        const unused = records.length - syncResult.synced;
 
-        if (syncResult.synced > 0) {
-          const { data: newBalance, error: deductErr } = await serviceClient.rpc(
-            "deduct_credits",
-            { p_user_id: userId, p_amount: syncResult.synced }
+        let finalBalance = reservedBalance as number;
+        if (unused > 0) {
+          const { data: refunded, error: refundErr } = await serviceClient.rpc(
+            "refund_credits",
+            { p_user_id: userId, p_amount: unused }
           );
-
-          if (deductErr) {
-            console.error("Credit deduction failed:", deductErr.message);
+          if (refundErr) {
+            console.error("Credit refund failed:", refundErr.message);
+          } else if (typeof refunded === "number") {
+            finalBalance = refunded;
           }
-
-          result = {
-            ...syncResult,
-            credits_remaining: newBalance ?? settings.credits - syncResult.synced,
-          };
-        } else {
-          result = { ...syncResult, credits_remaining: settings.credits };
         }
+
+        result = { ...syncResult, credits_remaining: finalBalance };
         break;
       }
 
