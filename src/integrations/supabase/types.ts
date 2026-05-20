@@ -159,6 +159,14 @@ export type Database = {
           maps_provider: string
         }[]
       }
+      refund_credits: {
+        Args: { p_amount: number; p_user_id: string }
+        Returns: number
+      }
+      reserve_credits: {
+        Args: { p_amount: number; p_user_id: string }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never
