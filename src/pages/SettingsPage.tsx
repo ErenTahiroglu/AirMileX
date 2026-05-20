@@ -114,18 +114,18 @@ const SettingsPage = () => {
     if (!user) return;
     setExporting(true);
     try {
-      const [settings, mappings, logs] = await Promise.all([
-        supabase.from("user_settings").select("*").eq("id", user.id).maybeSingle(),
+      const [settingsRes, mappings, logs] = await Promise.all([
+        supabase.rpc("get_settings_flags", { p_user_id: user.id }),
         supabase.from("saved_mappings").select("*").eq("user_id", user.id),
         supabase.from("calculation_logs").select("*").eq("user_id", user.id),
       ]);
 
+      const settingsRow = Array.isArray(settingsRes.data) ? settingsRes.data[0] : null;
+
       const payload = {
         exported_at: new Date().toISOString(),
         user: { id: user.id, email: user.email },
-        settings: settings.data
-          ? { ...settings.data, airtable_pat: undefined, maps_api_key: undefined }
-          : null,
+        settings: settingsRow ?? null,
         saved_mappings: mappings.data ?? [],
         calculation_logs: logs.data ?? [],
       };
