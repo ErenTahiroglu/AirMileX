@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "sdk_version": "2.0.4",
+  "path": "/mcp",
+  "auth": {
+    "type": "oauth",
+    "issuer": "https://lumfnuyzdyzpokcxykvn.supabase.co/auth/v1",
+    "accepted_audiences": [
+      "authenticated"
+    ]
+  },
+  "mcp": {
+    "server": {
+      "name": "airmilex",
+      "version": "0.1.0",
+      "title": "AirMileX"
+    },
+    "tools": [
+      {
+        "name": "get_account_status",
+        "title": "Get account status",
+        "description": "Return the signed-in AirMileX user's remaining credits, selected maps provider, and whether their Airtable and maps keys are configured.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_calculation_logs",
+        "title": "List mileage jobs",
+        "description": "List the signed-in user's recent mileage calculation jobs, newest first, with the Airtable base and table, record count, and provider used.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "description": "How many jobs to return (1-100, default 20)."
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_saved_mappings",
+        "title": "List saved column mappings",
+        "description": "List the signed-in user's saved Airtable column mappings (start address, end address, and distance output column per table).",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": null
+      }
+    ]
+  }
+}
