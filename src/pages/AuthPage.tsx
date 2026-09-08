@@ -13,6 +13,7 @@ import Footer from "@/components/Footer";
 import Seo from "@/components/Seo";
 import PasswordStrength from "@/components/PasswordStrength";
 import { friendlyAuthError } from "@/lib/authErrors";
+import { consumePostAuthRedirect, storePostAuthRedirect } from "@/lib/postAuthRedirect";
 import { MapPin, Zap, FileText } from "lucide-react";
 
 const AuthPage = () => {
@@ -24,6 +25,12 @@ const AuthPage = () => {
   const { signIn, signUp } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [searchParams] = useSearchParams();
+
+  // Preserve a requested destination (e.g. an app authorization request) across sign-in.
+  useEffect(() => {
+    storePostAuthRedirect(searchParams.get("next"));
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,7 +53,7 @@ const AuthPage = () => {
       return;
     }
 
-    navigate("/dashboard");
+    navigate(consumePostAuthRedirect() ?? "/dashboard");
   };
 
   const handleGoogleSignIn = async () => {
