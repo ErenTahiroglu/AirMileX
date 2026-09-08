@@ -115,6 +115,8 @@ export type Database = {
           airtable_pat: string | null
           created_at: string
           credits: number
+          has_maps_key: boolean | null
+          has_pat: boolean | null
           id: string
           maps_api_key: string | null
           maps_provider: string | null
@@ -124,6 +126,8 @@ export type Database = {
           airtable_pat?: string | null
           created_at?: string
           credits?: number
+          has_maps_key?: boolean | null
+          has_pat?: boolean | null
           id: string
           maps_api_key?: string | null
           maps_provider?: string | null
@@ -133,6 +137,8 @@ export type Database = {
           airtable_pat?: string | null
           created_at?: string
           credits?: number
+          has_maps_key?: boolean | null
+          has_pat?: boolean | null
           id?: string
           maps_api_key?: string | null
           maps_provider?: string | null
