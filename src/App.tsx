@@ -15,14 +15,16 @@ import PricingPage from "./pages/PricingPage";
 import TermsPage from "./pages/TermsPage";
 import PrivacyPage from "./pages/PrivacyPage";
 import RefundPage from "./pages/RefundPage";
+import OAuthConsent from "./pages/OAuthConsent";
 import NotFound from "./pages/NotFound";
+import { consumePostAuthRedirect } from "@/lib/postAuthRedirect";
 
 const queryClient = new QueryClient();
 
 const AuthRedirect = () => {
   const { user, loading } = useAuth();
   if (loading) return null;
-  if (user) return <Navigate to="/dashboard" replace />;
+  if (user) return <Navigate to={consumePostAuthRedirect() ?? "/dashboard"} replace />;
   return <AuthPage />;
 };
 
@@ -37,6 +39,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<AuthRedirect />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/terms-and-conditions" element={<TermsPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
