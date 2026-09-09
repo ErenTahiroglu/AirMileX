@@ -73,6 +73,7 @@ const Dashboard = () => {
           <Button asChild><Link to="/new-job">New Mileage Job</Link></Button>
         </div>
 
+        <h2 className="sr-only">Account overview</h2>
         <div className="grid gap-4 sm:grid-cols-2">
           <Card>
             <CardHeader>

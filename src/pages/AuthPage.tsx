@@ -197,6 +197,7 @@ const AuthPage = () => {
               </button>
             </CardContent>
           </Card>
+          </section>
         </div>
       </main>
       <Footer />
