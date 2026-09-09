@@ -103,6 +103,7 @@ const AuthPage = () => {
             <p className="text-lg text-muted-foreground leading-relaxed">
               Instantly calculate driving distances between addresses in your Airtable base and generate IRS-compliant mileage logs with zero manual effort.
             </p>
+            <h2 className="sr-only">How AirMileX works</h2>
             <div className="space-y-4 pt-2">
               <div className="flex items-start gap-3">
                 <MapPin className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
@@ -120,6 +121,8 @@ const AuthPage = () => {
           </div>
 
           {/* Auth Card */}
+          <section aria-labelledby="auth-heading" className="w-full">
+          <h2 id="auth-heading" className="sr-only">Sign in or create an account</h2>
           <Card className="w-full max-w-sm mx-auto md:mx-0">
             <CardHeader className="text-center">
               <CardTitle className="text-xl">Get Started</CardTitle>
@@ -194,6 +197,7 @@ const AuthPage = () => {
               </button>
             </CardContent>
           </Card>
+          </section>
         </div>
       </main>
       <Footer />

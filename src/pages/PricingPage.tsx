@@ -62,6 +62,7 @@ const PricingPage = () => {
           <h1 className="mt-6 text-3xl font-bold tracking-tight">Pricing</h1>
           <p className="mt-2 text-muted-foreground">Simple, transparent pricing for mileage calculations.</p>
 
+          <h2 className="sr-only">Credit packages</h2>
           <Card className="mt-10 text-left">
             <CardHeader className="text-center">
               <CardTitle className="text-xl">500 Mileage Credits</CardTitle>

@@ -207,6 +207,7 @@ const NewJobPage = () => {
       </header>
 
       <main className="container max-w-2xl py-8 space-y-6">
+        <h2 className="sr-only">Job setup</h2>
         {noSettings ? (
           <Card>
             <CardContent className="py-8 text-center">

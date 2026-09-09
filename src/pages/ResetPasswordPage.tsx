@@ -66,7 +66,8 @@ const ResetPasswordPage = () => {
         path="/reset-password"
         noindex
       />
-      <main className="flex-1 flex items-center justify-center px-4 py-12">
+      <main className="flex-1 flex flex-col items-center justify-center px-4 py-12">
+        <h1 className="sr-only">Reset your AirMileX password</h1>
         <Card className="w-full max-w-sm">
           <CardHeader className="text-center">
             <CardTitle className="text-xl">Reset your password</CardTitle>
