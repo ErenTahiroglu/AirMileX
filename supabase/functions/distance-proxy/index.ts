@@ -41,38 +41,112 @@ async function googleDistance(apiKey: string, pairs: AddressPair[]): Promise<Dis
   return results;
 }
 
-async function orsDistance(apiKey: string, pairs: AddressPair[]): Promise<DistanceResult[]> {
+/** Matches "41.0082, 28.9784" style plain coordinate input. */
+const COORD_RE = /^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/;
+
+type LonLat = [number, number];
+
+/** Returns [lon, lat] when the text is already a coordinate pair, else null. */
+function parseCoordinates(text: string): LonLat | null {
+  const match = COORD_RE.exec(text);
+  if (!match) return null;
+  const lat = Number(match[1]);
+  const lon = Number(match[2]);
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return [lon, lat];
+}
+
+async function orsGeocode(apiKey: string, address: string): Promise<LonLat> {
+  const url = `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(address)}&size=1`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Geocoding failed (${res.status}) for: ${address}`);
+  const data = await res.json();
+  const coords = data.features?.[0]?.geometry?.coordinates;
+  if (!coords) throw new Error(`Could not geocode: ${address}`);
+  return [coords[0], coords[1]];
+}
+
+async function geoapifyGeocode(apiKey: string, address: string): Promise<LonLat> {
+  const url = `https://api.geoapify.com/v1/geocode/search?text=${encodeURIComponent(address)}&limit=1&format=json&apiKey=${apiKey}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Geocoding failed (${res.status}) for: ${address}`);
+  const data = await res.json();
+  const hit = data.results?.[0];
+  if (!hit) throw new Error(`Could not geocode: ${address}`);
+  return [hit.lon, hit.lat];
+}
+
+/** Resolves free-text addresses to coordinates; passes through coordinate input. */
+async function resolveLocation(
+  provider: "openrouteservice" | "geoapify",
+  apiKey: string,
+  text: string
+): Promise<LonLat> {
+  const direct = parseCoordinates(text);
+  if (direct) return direct;
+  return provider === "geoapify"
+    ? await geoapifyGeocode(apiKey, text)
+    : await orsGeocode(apiKey, text);
+}
+
+async function orsRoute(apiKey: string, start: LonLat, end: LonLat): Promise<number> {
+  const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car", {
+    method: "POST",
+    headers: { Authorization: apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ coordinates: [start, end] }),
+  });
+  if (!res.ok) throw new Error(`Routing failed (${res.status})`);
+  const data = await res.json();
+  const meters = data.routes?.[0]?.summary?.distance;
+  if (meters === undefined) throw new Error("No route found");
+  return meters as number;
+}
+
+async function geoapifyRoute(apiKey: string, start: LonLat, end: LonLat): Promise<number> {
+  const waypoints = `${start[1]},${start[0]}|${end[1]},${end[0]}`;
+  const url = `https://api.geoapify.com/v1/routing?waypoints=${encodeURIComponent(waypoints)}&mode=drive&apiKey=${apiKey}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Routing failed (${res.status})`);
+  const data = await res.json();
+  const meters = data.features?.[0]?.properties?.distance;
+  if (meters === undefined) throw new Error("No route found");
+  return meters as number;
+}
+
+/** Geocode-then-route flow for OpenRouteService and Geoapify. */
+async function geocodeAndRoute(
+  provider: "openrouteservice" | "geoapify",
+  apiKey: string,
+  pairs: AddressPair[]
+): Promise<DistanceResult[]> {
   const results: DistanceResult[] = [];
   for (const pair of pairs) {
     try {
-      const geocode = async (addr: string) => {
-        const url = `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(addr)}&size=1`;
-        const res = await fetch(url);
-        const data = await res.json();
-        const coords = data.features?.[0]?.geometry?.coordinates;
-        if (!coords) throw new Error(`Could not geocode: ${addr}`);
-        return coords as [number, number];
-      };
-      const startCoords = await geocode(pair.start);
-      const endCoords = await geocode(pair.end);
-      const dirRes = await fetch("https://api.openrouteservice.org/v2/directions/driving-car", {
-        method: "POST",
-        headers: { Authorization: apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify({ coordinates: [startCoords, endCoords] }),
+      const startCoords = await resolveLocation(provider, apiKey, pair.start);
+      const endCoords = await resolveLocation(provider, apiKey, pair.end);
+      const meters =
+        provider === "geoapify"
+          ? await geoapifyRoute(apiKey, startCoords, endCoords)
+          : await orsRoute(apiKey, startCoords, endCoords);
+      results.push({
+        record_id: pair.record_id,
+        distance_km: meters / 1000,
+        distance_mi: meters / 1609.344,
+        status: "ok",
       });
-      const dirData = await dirRes.json();
-      const meters = dirData.routes?.[0]?.summary?.distance;
-      if (meters !== undefined) {
-        results.push({ record_id: pair.record_id, distance_km: meters / 1000, distance_mi: meters / 1609.344, status: "ok" });
-      } else {
-        results.push({ record_id: pair.record_id, distance_km: 0, distance_mi: 0, status: "error", error: "No route found" });
-      }
     } catch (err) {
-      results.push({ record_id: pair.record_id, distance_km: 0, distance_mi: 0, status: "error", error: (err as Error).message });
+      results.push({
+        record_id: pair.record_id,
+        distance_km: 0,
+        distance_mi: 0,
+        status: "error",
+        error: (err as Error).message,
+      });
     }
   }
   return results;
 }
+
 
 async function getUserIdFromAuth(req: Request): Promise<string> {
   const authHeader = req.headers.get("Authorization");
