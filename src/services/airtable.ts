@@ -68,8 +68,7 @@ export const syncRecords = async (
   );
 
   const synced = batchResults.reduce(
-    (total: number, result: SyncResult | undefined, index) =>
-      total + (result?.synced ?? 0),
+    (total: number, result: SyncResult | undefined) => total + (result?.synced ?? 0),
     0
   );
 
