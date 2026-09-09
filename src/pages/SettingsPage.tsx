@@ -208,6 +208,7 @@ const SettingsPage = () => {
       </header>
 
       <main className="container max-w-lg py-8 space-y-6">
+        <h2 className="sr-only">Account settings</h2>
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Airtable Integration</CardTitle>

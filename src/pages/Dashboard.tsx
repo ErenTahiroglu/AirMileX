@@ -139,6 +139,7 @@ const Dashboard = () => {
               </Table>
             </CardContent>
           </Card>
+          </section>
         )}
       </main>
     </div>
