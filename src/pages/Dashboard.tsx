@@ -112,6 +112,8 @@ const Dashboard = () => {
         </div>
 
         {logs.length > 0 && (
+          <section aria-labelledby="recent-syncs-heading">
+          <h2 id="recent-syncs-heading" className="sr-only">Recent syncs</h2>
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Recent Syncs</CardTitle>
