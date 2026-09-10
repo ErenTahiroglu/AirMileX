@@ -68,6 +68,30 @@ export type Database = {
         }
         Relationships: []
       }
+      geocode_cache: {
+        Row: {
+          created_at: string
+          label: string | null
+          lat: number
+          lon: number
+          query_key: string
+        }
+        Insert: {
+          created_at?: string
+          label?: string | null
+          lat: number
+          lon: number
+          query_key: string
+        }
+        Update: {
+          created_at?: string
+          label?: string | null
+          lat?: number
+          lon?: number
+          query_key?: string
+        }
+        Relationships: []
+      }
       processed_paddle_events: {
         Row: {
           created_at: string
@@ -80,6 +104,27 @@ export type Database = {
         Update: {
           created_at?: string
           id?: string
+        }
+        Relationships: []
+      }
+      route_cache: {
+        Row: {
+          created_at: string
+          distance_m: number
+          duration_s: number
+          route_key: string
+        }
+        Insert: {
+          created_at?: string
+          distance_m: number
+          duration_s: number
+          route_key: string
+        }
+        Update: {
+          created_at?: string
+          distance_m?: number
+          duration_s?: number
+          route_key?: string
         }
         Relationships: []
       }
