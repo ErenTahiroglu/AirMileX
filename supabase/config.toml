@@ -2,3 +2,6 @@ project_id = "lumfnuyzdyzpokcxykvn"
 
 [functions.paddle-webhook]
 verify_jwt = false
+
+[functions.quick-distance]
+verify_jwt = false
