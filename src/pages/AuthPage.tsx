@@ -118,6 +118,11 @@ const AuthPage = () => {
                 <p className="text-sm text-muted-foreground">Generate accurate, audit-ready mileage records automatically.</p>
               </div>
             </div>
+
+            <section aria-labelledby="quick-calc-heading" className="pt-4 text-left">
+              <h2 id="quick-calc-heading" className="sr-only">Quick mileage calculator</h2>
+              <QuickMileageCalculator />
+            </section>
           </div>
 
           {/* Auth Card */}
