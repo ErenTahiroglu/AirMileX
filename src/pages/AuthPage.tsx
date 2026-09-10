@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import Footer from "@/components/Footer";
 import Seo from "@/components/Seo";
 import PasswordStrength from "@/components/PasswordStrength";
+import QuickMileageCalculator from "@/components/QuickMileageCalculator";
 import { friendlyAuthError } from "@/lib/authErrors";
 import { consumePostAuthRedirect, storePostAuthRedirect } from "@/lib/postAuthRedirect";
 import { MapPin, Zap, FileText } from "lucide-react";
@@ -118,6 +119,11 @@ const AuthPage = () => {
                 <p className="text-sm text-muted-foreground">Generate accurate, audit-ready mileage records automatically.</p>
               </div>
             </div>
+
+            <section aria-labelledby="quick-calc-heading" className="pt-4 text-left">
+              <h2 id="quick-calc-heading" className="sr-only">Quick mileage calculator</h2>
+              <QuickMileageCalculator />
+            </section>
           </div>
 
           {/* Auth Card */}
