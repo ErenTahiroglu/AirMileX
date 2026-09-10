@@ -203,8 +203,8 @@ serve(async (req) => {
     let results: DistanceResult[];
     if (provider === "google") {
       results = await googleDistance(apiKey, pairs);
-    } else if (provider === "openrouteservice") {
-      results = await orsDistance(apiKey, pairs);
+    } else if (provider === "openrouteservice" || provider === "geoapify") {
+      results = await geocodeAndRoute(provider, apiKey, pairs);
     } else {
       throw new Error(`Unknown provider: ${provider}`);
     }
