@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import Footer from "@/components/Footer";
 import Seo from "@/components/Seo";
 import PasswordStrength from "@/components/PasswordStrength";
+import QuickMileageCalculator from "@/components/QuickMileageCalculator";
 import { friendlyAuthError } from "@/lib/authErrors";
 import { consumePostAuthRedirect, storePostAuthRedirect } from "@/lib/postAuthRedirect";
 import { MapPin, Zap, FileText } from "lucide-react";
