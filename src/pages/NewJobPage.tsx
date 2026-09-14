@@ -415,6 +415,7 @@ const NewJobPage = () => {
                         <TableHead>Start</TableHead>
                         <TableHead>End</TableHead>
                         {distances.length > 0 && <TableHead>Distance</TableHead>}
+                        {distances.length > 0 && costCol && <TableHead>Amount</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -432,6 +433,13 @@ const NewJobPage = () => {
                                 {dist?.status === "ok" ? `${dist.distance_mi.toFixed(2)} mi` : dist?.error ?? "—"}
                               </TableCell>
                             )}
+                            {distances.length > 0 && costCol && (
+                              <TableCell>
+                                {dist?.status === "ok"
+                                  ? `$${calculateReimbursement(dist.distance_mi, ratePerUnit, rateUnit).toFixed(2)}`
+                                  : "—"}
+                              </TableCell>
+                            )}
                           </TableRow>
                         );
                       })}
@@ -443,6 +451,56 @@ const NewJobPage = () => {
           </>
         )}
       </main>
+
+      {/* Calculation summary */}
+      <Dialog open={showSummary} onOpenChange={setShowSummary}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Hesaplama özeti</DialogTitle>
+            <DialogDescription>
+              {okCount} satır başarıyla hesaplandı, {failedCount} satır doğrulanamadı.
+            </DialogDescription>
+          </DialogHeader>
+
+          {failedCount > 0 ? (
+            <div className="max-h-72 overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Record ID</TableHead>
+                    <TableHead>Adres</TableHead>
+                    <TableHead>Sebep</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {distances.filter((d) => d.status !== "ok").map((d) => {
+                    const row = preview.find((p) => p.id === d.record_id);
+                    const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
+                    const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
+                    return (
+                      <TableRow key={d.record_id}>
+                        <TableCell className="font-mono text-xs">{d.record_id.slice(0, 10)}</TableCell>
+                        <TableCell className="text-xs">
+                          {String(row?.fields[startField] ?? "—")} → {String(row?.fields[endField] ?? "—")}
+                        </TableCell>
+                        <TableCell className="text-xs">{d.error ?? "Adres Bulunamadı"}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Tüm satırlar başarıyla hesaplandı.</p>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            {statusCol
+              ? "Doğrulanamayan satırlar atlanır ve Airtable'daki durum sütununa 'Adres Bulunamadı' yazılır."
+              : "Doğrulanamayan satırları Airtable'da işaretlemek için bir 'Status / Log' sütunu seçin."}
+          </p>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
