@@ -13,6 +13,7 @@ export interface SavedMapping {
   end_col_id: string;
   distance_col_id: string;
   cost_col_id: string | null;
+  status_col_id: string | null;
   rate_per_unit: number;
   rate_unit: RateUnit;
 }
@@ -24,6 +25,7 @@ export interface MappingInput {
   end_col_id: string;
   distance_col_id: string;
   cost_col_id?: string | null;
+  status_col_id?: string | null;
   rate_per_unit?: number;
   rate_unit?: RateUnit;
 }
@@ -42,6 +44,7 @@ export const getMapping = async (userId: string, tableId: string): Promise<Saved
   return {
     ...data,
     cost_col_id: data.cost_col_id ?? null,
+    status_col_id: data.status_col_id ?? null,
     rate_per_unit: Number(data.rate_per_unit ?? DEFAULT_RATE_PER_MILE),
     rate_unit: (data.rate_unit ?? "mi") as RateUnit,
   } as SavedMapping;
