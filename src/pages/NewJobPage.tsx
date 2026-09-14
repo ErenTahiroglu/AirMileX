@@ -4,12 +4,19 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
 import { listBases, listTables, readRecords, syncRecords } from "@/services/airtable";
 import { calculateDistances, AddressPair, DistanceResult } from "@/services/distance";
-import { getMapping, upsertMapping } from "@/services/mappings";
+import {
+  getMapping,
+  upsertMapping,
+  calculateReimbursement,
+  DEFAULT_RATE_PER_MILE,
+  RateUnit,
+} from "@/services/mappings";
 import { insertLog } from "@/services/logs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
