@@ -137,6 +137,7 @@ export type Database = {
           rate_per_unit: number
           rate_unit: string
           start_col_id: string
+          status_col_id: string | null
           table_id: string
           user_id: string
         }
@@ -148,6 +149,7 @@ export type Database = {
           rate_per_unit?: number
           rate_unit?: string
           start_col_id: string
+          status_col_id?: string | null
           table_id: string
           user_id: string
         }
@@ -159,6 +161,7 @@ export type Database = {
           rate_per_unit?: number
           rate_unit?: string
           start_col_id?: string
+          status_col_id?: string | null
           table_id?: string
           user_id?: string
         }
