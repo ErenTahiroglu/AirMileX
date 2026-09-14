@@ -153,8 +153,13 @@ const NewJobPage = () => {
       }));
 
       const result = await calculateDistances(pairs);
-      setDistances(result.results ?? []);
-      toast({ title: "Distances calculated" });
+      const results = result.results ?? [];
+      setDistances(results);
+      setShowSummary(true);
+      toast({
+        title: "Hesaplama tamamlandı",
+        description: `${results.filter((r) => r.status === "ok").length} satır başarılı, ${results.filter((r) => r.status !== "ok").length} satır doğrulanamadı.`,
+      });
     } catch (e: unknown) {
       toast({ title: "Error", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -165,16 +170,39 @@ const NewJobPage = () => {
   const handleSync = async () => {
     if (!distances.length) return;
     setSyncing(true);
+
+    const fieldName = (id: string) => fields.find((f) => f.id === id)?.name ?? id;
+    const distField = fieldName(distanceCol);
+    const costField = costCol ? fieldName(costCol) : null;
+    const statusField = statusCol ? fieldName(statusCol) : null;
+
     const successResults = distances.filter((d) => d.status === "ok");
-    setSyncProgress({ synced: 0, total: successResults.length });
+    const failedResults = distances.filter((d) => d.status !== "ok");
+
+    // Successful rows: distance (+ reimbursement) written in a single update.
+    const records = successResults.map((d) => {
+      const values: Record<string, string | number> = {
+        [distField]: `${d.distance_mi.toFixed(2)} mi`,
+      };
+      if (costField) {
+        values[costField] = Number(
+          calculateReimbursement(d.distance_mi, ratePerUnit, rateUnit).toFixed(2)
+        );
+      }
+      if (statusField) values[statusField] = "Hesaplandı";
+      return { id: d.record_id, fields: values };
+    });
+
+    // Failed rows are skipped, not fatal: only the status/log column is marked.
+    if (statusField) {
+      failedResults.forEach((d) => {
+        records.push({ id: d.record_id, fields: { [statusField]: "Adres Bulunamadı" } });
+      });
+    }
+
+    setSyncProgress({ synced: 0, total: records.length });
 
     try {
-      const distField = fields.find((f) => f.id === distanceCol)?.name ?? distanceCol;
-      const records = successResults.map((d) => ({
-        id: d.record_id,
-        value: `${d.distance_mi.toFixed(2)} mi`,
-      }));
-
       const result = await syncRecords({
         baseId: selectedBase,
         tableId: selectedTable,
