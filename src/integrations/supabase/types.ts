@@ -130,25 +130,34 @@ export type Database = {
       }
       saved_mappings: {
         Row: {
+          cost_col_id: string | null
           distance_col_id: string
           end_col_id: string
           id: string
+          rate_per_unit: number
+          rate_unit: string
           start_col_id: string
           table_id: string
           user_id: string
         }
         Insert: {
+          cost_col_id?: string | null
           distance_col_id: string
           end_col_id: string
           id?: string
+          rate_per_unit?: number
+          rate_unit?: string
           start_col_id: string
           table_id: string
           user_id: string
         }
         Update: {
+          cost_col_id?: string | null
           distance_col_id?: string
           end_col_id?: string
           id?: string
+          rate_per_unit?: number
+          rate_unit?: string
           start_col_id?: string
           table_id?: string
           user_id?: string
