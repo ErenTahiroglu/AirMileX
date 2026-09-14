@@ -44,6 +44,8 @@ const NewJobPage = () => {
   const [endCol, setEndCol] = useState("");
   const [distanceCol, setDistanceCol] = useState("");
   const [costCol, setCostCol] = useState("");
+  const [statusCol, setStatusCol] = useState("");
+  const [showSummary, setShowSummary] = useState(false);
   const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
   const [rateUnit, setRateUnit] = useState<RateUnit>("mi");
 
@@ -104,6 +106,7 @@ const NewJobPage = () => {
         setEndCol(m.end_col_id);
         setDistanceCol(m.distance_col_id);
         setCostCol(m.cost_col_id ?? "");
+        setStatusCol(m.status_col_id ?? "");
         setRatePerUnit(m.rate_per_unit);
         setRateUnit(m.rate_unit);
       }
