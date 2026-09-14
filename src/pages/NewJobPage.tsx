@@ -43,6 +43,9 @@ const NewJobPage = () => {
   const [startCol, setStartCol] = useState("");
   const [endCol, setEndCol] = useState("");
   const [distanceCol, setDistanceCol] = useState("");
+  const [costCol, setCostCol] = useState("");
+  const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
+  const [rateUnit, setRateUnit] = useState<RateUnit>("mi");
 
   const [preview, setPreview] = useState<PreviewRecord[]>([]);
   const [distances, setDistances] = useState<DistanceResult[]>([]);
@@ -100,11 +103,14 @@ const NewJobPage = () => {
         setStartCol(m.start_col_id);
         setEndCol(m.end_col_id);
         setDistanceCol(m.distance_col_id);
+        setCostCol(m.cost_col_id ?? "");
+        setRatePerUnit(m.rate_per_unit);
+        setRateUnit(m.rate_unit);
       }
     });
   }, [selectedTable, tables, user]);
 
-  // Save mapping when cols change
+  // Save mapping when cols or rate settings change
   useEffect(() => {
     if (!user || !selectedTable || !startCol || !endCol || !distanceCol) return;
     upsertMapping({
@@ -113,8 +119,11 @@ const NewJobPage = () => {
       start_col_id: startCol,
       end_col_id: endCol,
       distance_col_id: distanceCol,
+      cost_col_id: costCol || null,
+      rate_per_unit: ratePerUnit,
+      rate_unit: rateUnit,
     }).catch(() => {});
-  }, [user, selectedTable, startCol, endCol, distanceCol]);
+  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
     if (!distanceCol) return;
