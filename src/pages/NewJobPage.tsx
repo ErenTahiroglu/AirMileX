@@ -306,20 +306,68 @@ const NewJobPage = () => {
                 <CardHeader><CardTitle className="text-base">Column Mapping</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
                   {[
-                    { label: "Start Address", value: startCol, onChange: setStartCol },
-                    { label: "End Address", value: endCol, onChange: setEndCol },
-                    { label: "Distance Output", value: distanceCol, onChange: setDistanceCol },
-                  ].map(({ label, value, onChange }) => (
+                    { label: "Start Address", value: startCol, onChange: setStartCol, optional: false },
+                    { label: "End Address", value: endCol, onChange: setEndCol, optional: false },
+                    { label: "Distance Output", value: distanceCol, onChange: setDistanceCol, optional: false },
+                    { label: "Reimbursement Amount", value: costCol, onChange: setCostCol, optional: true },
+                    { label: "Status / Log", value: statusCol, onChange: setStatusCol, optional: true },
+                  ].map(({ label, value, onChange, optional }) => (
                     <div key={label} className="space-y-2">
-                      <Label>{label}</Label>
-                      <Select value={value} onValueChange={onChange}>
+                      <Label>{label}{optional && <span className="text-muted-foreground"> (optional)</span>}</Label>
+                      <Select value={value || undefined} onValueChange={(v) => onChange(v === "__none__" ? "" : v)}>
                         <SelectTrigger><SelectValue placeholder={`Select ${label}`} /></SelectTrigger>
                         <SelectContent>
+                          {optional && <SelectItem value="__none__">None</SelectItem>}
                           {fields.map((f) => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     </div>
                   ))}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Reimbursement Rate */}
+            {fields.length > 0 && (
+              <Card>
+                <CardHeader><CardTitle className="text-base">Reimbursement Rate</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="rate">Rate per unit ($)</Label>
+                      <Input
+                        id="rate"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={ratePerUnit}
+                        onChange={(e) => setRatePerUnit(Math.max(0, Number(e.target.value) || 0))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Unit</Label>
+                      <Select value={rateUnit} onValueChange={(v) => setRateUnit(v as RateUnit)}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="mi">Per mile</SelectItem>
+                          <SelectItem value="km">Per kilometre</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm text-muted-foreground">
+                      Default is the IRS rate of ${DEFAULT_RATE_PER_MILE.toFixed(2)} per mile (H2 2026).
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setRatePerUnit(DEFAULT_RATE_PER_MILE); setRateUnit("mi"); }}
+                    >
+                      Reset to IRS rate
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             )}
