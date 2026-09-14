@@ -31,11 +31,17 @@ export const readRecords = (
 ) =>
   callProxy("read-records", { baseId, tableId, distanceFieldId, limit });
 
+export interface SyncRecord {
+  id: string;
+  /** Field name -> value map; allows writing distance and cost in one request. */
+  fields: Record<string, string | number>;
+}
+
 export interface SyncPayload {
   baseId: string;
   tableId: string;
   distanceFieldId: string;
-  records: { id: string; value: string }[];
+  records: SyncRecord[];
 }
 
 export interface SyncResult {
