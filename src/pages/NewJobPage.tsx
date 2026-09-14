@@ -4,12 +4,19 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
 import { listBases, listTables, readRecords, syncRecords } from "@/services/airtable";
 import { calculateDistances, AddressPair, DistanceResult } from "@/services/distance";
-import { getMapping, upsertMapping } from "@/services/mappings";
+import {
+  getMapping,
+  upsertMapping,
+  calculateReimbursement,
+  DEFAULT_RATE_PER_MILE,
+  RateUnit,
+} from "@/services/mappings";
 import { insertLog } from "@/services/logs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
@@ -36,6 +43,11 @@ const NewJobPage = () => {
   const [startCol, setStartCol] = useState("");
   const [endCol, setEndCol] = useState("");
   const [distanceCol, setDistanceCol] = useState("");
+  const [costCol, setCostCol] = useState("");
+  const [statusCol, setStatusCol] = useState("");
+  const [showSummary, setShowSummary] = useState(false);
+  const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
+  const [rateUnit, setRateUnit] = useState<RateUnit>("mi");
 
   const [preview, setPreview] = useState<PreviewRecord[]>([]);
   const [distances, setDistances] = useState<DistanceResult[]>([]);
@@ -93,11 +105,15 @@ const NewJobPage = () => {
         setStartCol(m.start_col_id);
         setEndCol(m.end_col_id);
         setDistanceCol(m.distance_col_id);
+        setCostCol(m.cost_col_id ?? "");
+        setStatusCol(m.status_col_id ?? "");
+        setRatePerUnit(m.rate_per_unit);
+        setRateUnit(m.rate_unit);
       }
     });
   }, [selectedTable, tables, user]);
 
-  // Save mapping when cols change
+  // Save mapping when cols or rate settings change
   useEffect(() => {
     if (!user || !selectedTable || !startCol || !endCol || !distanceCol) return;
     upsertMapping({
@@ -106,8 +122,12 @@ const NewJobPage = () => {
       start_col_id: startCol,
       end_col_id: endCol,
       distance_col_id: distanceCol,
+      cost_col_id: costCol || null,
+      status_col_id: statusCol || null,
+      rate_per_unit: ratePerUnit,
+      rate_unit: rateUnit,
     }).catch(() => {});
-  }, [user, selectedTable, startCol, endCol, distanceCol]);
+  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
     if (!distanceCol) return;
@@ -137,8 +157,13 @@ const NewJobPage = () => {
       }));
 
       const result = await calculateDistances(pairs);
-      setDistances(result.results ?? []);
-      toast({ title: "Distances calculated" });
+      const results = result.results ?? [];
+      setDistances(results);
+      setShowSummary(true);
+      toast({
+        title: "Hesaplama tamamlandı",
+        description: `${results.filter((r) => r.status === "ok").length} satır başarılı, ${results.filter((r) => r.status !== "ok").length} satır doğrulanamadı.`,
+      });
     } catch (e: unknown) {
       toast({ title: "Error", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -149,16 +174,39 @@ const NewJobPage = () => {
   const handleSync = async () => {
     if (!distances.length) return;
     setSyncing(true);
+
+    const fieldName = (id: string) => fields.find((f) => f.id === id)?.name ?? id;
+    const distField = fieldName(distanceCol);
+    const costField = costCol ? fieldName(costCol) : null;
+    const statusField = statusCol ? fieldName(statusCol) : null;
+
     const successResults = distances.filter((d) => d.status === "ok");
-    setSyncProgress({ synced: 0, total: successResults.length });
+    const failedResults = distances.filter((d) => d.status !== "ok");
+
+    // Successful rows: distance (+ reimbursement) written in a single update.
+    const records = successResults.map((d) => {
+      const values: Record<string, string | number> = {
+        [distField]: `${d.distance_mi.toFixed(2)} mi`,
+      };
+      if (costField) {
+        values[costField] = Number(
+          calculateReimbursement(d.distance_mi, ratePerUnit, rateUnit).toFixed(2)
+        );
+      }
+      if (statusField) values[statusField] = "Hesaplandı";
+      return { id: d.record_id, fields: values };
+    });
+
+    // Failed rows are skipped, not fatal: only the status/log column is marked.
+    if (statusField) {
+      failedResults.forEach((d) => {
+        records.push({ id: d.record_id, fields: { [statusField]: "Adres Bulunamadı" } });
+      });
+    }
+
+    setSyncProgress({ synced: 0, total: records.length });
 
     try {
-      const distField = fields.find((f) => f.id === distanceCol)?.name ?? distanceCol;
-      const records = successResults.map((d) => ({
-        id: d.record_id,
-        value: `${d.distance_mi.toFixed(2)} mi`,
-      }));
-
       const result = await syncRecords({
         baseId: selectedBase,
         tableId: selectedTable,
@@ -258,20 +306,68 @@ const NewJobPage = () => {
                 <CardHeader><CardTitle className="text-base">Column Mapping</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
                   {[
-                    { label: "Start Address", value: startCol, onChange: setStartCol },
-                    { label: "End Address", value: endCol, onChange: setEndCol },
-                    { label: "Distance Output", value: distanceCol, onChange: setDistanceCol },
-                  ].map(({ label, value, onChange }) => (
+                    { label: "Start Address", value: startCol, onChange: setStartCol, optional: false },
+                    { label: "End Address", value: endCol, onChange: setEndCol, optional: false },
+                    { label: "Distance Output", value: distanceCol, onChange: setDistanceCol, optional: false },
+                    { label: "Reimbursement Amount", value: costCol, onChange: setCostCol, optional: true },
+                    { label: "Status / Log", value: statusCol, onChange: setStatusCol, optional: true },
+                  ].map(({ label, value, onChange, optional }) => (
                     <div key={label} className="space-y-2">
-                      <Label>{label}</Label>
-                      <Select value={value} onValueChange={onChange}>
+                      <Label>{label}{optional && <span className="text-muted-foreground"> (optional)</span>}</Label>
+                      <Select value={value || undefined} onValueChange={(v) => onChange(v === "__none__" ? "" : v)}>
                         <SelectTrigger><SelectValue placeholder={`Select ${label}`} /></SelectTrigger>
                         <SelectContent>
+                          {optional && <SelectItem value="__none__">None</SelectItem>}
                           {fields.map((f) => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     </div>
                   ))}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Reimbursement Rate */}
+            {fields.length > 0 && (
+              <Card>
+                <CardHeader><CardTitle className="text-base">Reimbursement Rate</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="rate">Rate per unit ($)</Label>
+                      <Input
+                        id="rate"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={ratePerUnit}
+                        onChange={(e) => setRatePerUnit(Math.max(0, Number(e.target.value) || 0))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Unit</Label>
+                      <Select value={rateUnit} onValueChange={(v) => setRateUnit(v as RateUnit)}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="mi">Per mile</SelectItem>
+                          <SelectItem value="km">Per kilometre</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm text-muted-foreground">
+                      Default is the IRS rate of ${DEFAULT_RATE_PER_MILE.toFixed(2)} per mile (H2 2026).
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setRatePerUnit(DEFAULT_RATE_PER_MILE); setRateUnit("mi"); }}
+                    >
+                      Reset to IRS rate
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -319,6 +415,7 @@ const NewJobPage = () => {
                         <TableHead>Start</TableHead>
                         <TableHead>End</TableHead>
                         {distances.length > 0 && <TableHead>Distance</TableHead>}
+                        {distances.length > 0 && costCol && <TableHead>Amount</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -336,6 +433,13 @@ const NewJobPage = () => {
                                 {dist?.status === "ok" ? `${dist.distance_mi.toFixed(2)} mi` : dist?.error ?? "—"}
                               </TableCell>
                             )}
+                            {distances.length > 0 && costCol && (
+                              <TableCell>
+                                {dist?.status === "ok"
+                                  ? `$${calculateReimbursement(dist.distance_mi, ratePerUnit, rateUnit).toFixed(2)}`
+                                  : "—"}
+                              </TableCell>
+                            )}
                           </TableRow>
                         );
                       })}
@@ -347,6 +451,56 @@ const NewJobPage = () => {
           </>
         )}
       </main>
+
+      {/* Calculation summary */}
+      <Dialog open={showSummary} onOpenChange={setShowSummary}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Hesaplama özeti</DialogTitle>
+            <DialogDescription>
+              {okCount} satır başarıyla hesaplandı, {failedCount} satır doğrulanamadı.
+            </DialogDescription>
+          </DialogHeader>
+
+          {failedCount > 0 ? (
+            <div className="max-h-72 overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Record ID</TableHead>
+                    <TableHead>Adres</TableHead>
+                    <TableHead>Sebep</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {distances.filter((d) => d.status !== "ok").map((d) => {
+                    const row = preview.find((p) => p.id === d.record_id);
+                    const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
+                    const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
+                    return (
+                      <TableRow key={d.record_id}>
+                        <TableCell className="font-mono text-xs">{d.record_id.slice(0, 10)}</TableCell>
+                        <TableCell className="text-xs">
+                          {String(row?.fields[startField] ?? "—")} → {String(row?.fields[endField] ?? "—")}
+                        </TableCell>
+                        <TableCell className="text-xs">{d.error ?? "Adres Bulunamadı"}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Tüm satırlar başarıyla hesaplandı.</p>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            {statusCol
+              ? "Doğrulanamayan satırlar atlanır ve Airtable'daki durum sütununa 'Adres Bulunamadı' yazılır."
+              : "Doğrulanamayan satırları Airtable'da işaretlemek için bir 'Status / Log' sütunu seçin."}
+          </p>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

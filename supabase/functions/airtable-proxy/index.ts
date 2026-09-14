@@ -27,12 +27,20 @@ async function airtableFetch(url: string, pat: string, options: RequestInit = {}
   return res.json();
 }
 
+interface SyncRecord {
+  id: string;
+  /** Legacy single-field payload (distance only). */
+  value?: string;
+  /** Field name -> value map, used when multiple columns are written at once. */
+  fields?: Record<string, string | number>;
+}
+
 async function syncWithBatching(
   pat: string,
   baseId: string,
   tableId: string,
   distanceFieldId: string,
-  records: { id: string; value: string }[]
+  records: SyncRecord[]
 ) {
   const BATCH_SIZE = 10;
   const DELAY_MS = 250;
@@ -47,7 +55,7 @@ async function syncWithBatching(
     const payload = {
       records: batch.map((r) => ({
         id: r.id,
-        fields: { [distanceFieldId]: r.value },
+        fields: r.fields ?? { [distanceFieldId]: r.value },
       })),
     };
 
