@@ -123,10 +123,11 @@ const NewJobPage = () => {
       end_col_id: endCol,
       distance_col_id: distanceCol,
       cost_col_id: costCol || null,
+      status_col_id: statusCol || null,
       rate_per_unit: ratePerUnit,
       rate_unit: rateUnit,
     }).catch(() => {});
-  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, ratePerUnit, rateUnit]);
+  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
     if (!distanceCol) return;
