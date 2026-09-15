@@ -26,7 +26,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import { ToastAction } from "@/components/ui/toast";
 
 interface AirtableBase { id: string; name: string }
 interface AirtableTable { id: string; name: string; fields: AirtableField[] }
