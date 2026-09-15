@@ -165,16 +165,24 @@ async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Pro
   let coords: LonLat | null = null;
   const failures: string[] = [];
 
-  const attempts: Array<() => Promise<LonLat>> = [() => nominatimGeocode(address)];
-  if (GEOAPIFY_KEY) attempts.push(() => geoapifyGeocode(GEOAPIFY_KEY, address));
-  if (ORS_KEY) attempts.push(() => orsGeocode(ORS_KEY, address));
+  try {
+    coords = await nominatimGeocode(address);
+  } catch (err) {
+    failures.push((err as Error).message);
+  }
 
-  for (const attempt of attempts) {
-    try {
-      coords = await attempt();
-      break;
-    } catch (err) {
-      failures.push((err as Error).message);
+  // Keyed (paid) providers are only tried while the daily fallback budget allows it.
+  if (!coords && (GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
+    const paidAttempts: Array<() => Promise<LonLat>> = [];
+    if (GEOAPIFY_KEY) paidAttempts.push(() => geoapifyGeocode(GEOAPIFY_KEY, address));
+    if (ORS_KEY) paidAttempts.push(() => orsGeocode(ORS_KEY, address));
+    for (const attempt of paidAttempts) {
+      try {
+        coords = await attempt();
+        break;
+      } catch (err) {
+        failures.push((err as Error).message);
+      }
     }
   }
 
