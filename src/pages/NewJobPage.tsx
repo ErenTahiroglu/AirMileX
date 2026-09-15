@@ -520,6 +520,22 @@ const NewJobPage = () => {
               ? "Doğrulanamayan satırlar atlanır ve Airtable'daki durum sütununa 'Adres Bulunamadı' yazılır."
               : "Doğrulanamayan satırları Airtable'da işaretlemek için bir 'Status / Log' sütunu seçin."}
           </p>
+
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSummary(false);
+                setDistances([]);
+                setPreview([]);
+                setSyncedCount(null);
+                setSyncProgress({ synced: 0, total: 0 });
+              }}
+            >
+              Tabloyu temizle
+            </Button>
+            <Button onClick={() => navigate("/dashboard")}>Dashboard'a dön</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
