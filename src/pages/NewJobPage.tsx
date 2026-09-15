@@ -38,6 +38,7 @@ interface PreviewRecord { id: string; fields: Record<string, unknown> }
 const NewJobPage = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
