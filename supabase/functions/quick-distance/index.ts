@@ -123,10 +123,34 @@ async function orsRoute(apiKey: string, start: LonLat, end: LonLat): Promise<Rou
 const GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
 const ORS_KEY = Deno.env.get("OPENROUTESERVICE_API_KEY") ?? "";
 
+/** Abuse controls for this intentionally public endpoint. */
+const IP_LIMIT_PER_HOUR = 20;
+const GLOBAL_LIMIT_PER_DAY = 2000;
+/** Daily ceiling on calls that hit the operator's paid fallback providers. */
+const PAID_FALLBACK_LIMIT_PER_DAY = 300;
+
 type Db = ReturnType<typeof createClient>;
+type PaidGate = () => Promise<boolean>;
+
+/** Atomic counter in the database; returns false once the bucket is over its limit. */
+async function consumeQuota(
+  db: Db,
+  bucketKey: string,
+  limit: number,
+  windowSeconds: number
+): Promise<boolean> {
+  const { data, error } = await db.rpc("consume_quick_distance_quota", {
+    p_bucket_key: bucketKey,
+    p_limit: limit,
+    p_window_seconds: windowSeconds,
+  });
+  // Fail closed: if the counter is unavailable we do not hand out free provider calls.
+  if (error) return false;
+  return data === true;
+}
 
 /** Open service first, keyed providers only as failover. */
-async function resolveAddress(db: Db, address: string): Promise<LonLat> {
+async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Promise<LonLat> {
   const direct = parseCoordinates(address);
   if (direct) return direct;
 
@@ -141,16 +165,24 @@ async function resolveAddress(db: Db, address: string): Promise<LonLat> {
   let coords: LonLat | null = null;
   const failures: string[] = [];
 
-  const attempts: Array<() => Promise<LonLat>> = [() => nominatimGeocode(address)];
-  if (GEOAPIFY_KEY) attempts.push(() => geoapifyGeocode(GEOAPIFY_KEY, address));
-  if (ORS_KEY) attempts.push(() => orsGeocode(ORS_KEY, address));
+  try {
+    coords = await nominatimGeocode(address);
+  } catch (err) {
+    failures.push((err as Error).message);
+  }
 
-  for (const attempt of attempts) {
-    try {
-      coords = await attempt();
-      break;
-    } catch (err) {
-      failures.push((err as Error).message);
+  // Keyed (paid) providers are only tried while the daily fallback budget allows it.
+  if (!coords && (GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
+    const paidAttempts: Array<() => Promise<LonLat>> = [];
+    if (GEOAPIFY_KEY) paidAttempts.push(() => geoapifyGeocode(GEOAPIFY_KEY, address));
+    if (ORS_KEY) paidAttempts.push(() => orsGeocode(ORS_KEY, address));
+    for (const attempt of paidAttempts) {
+      try {
+        coords = await attempt();
+        break;
+      } catch (err) {
+        failures.push((err as Error).message);
+      }
     }
   }
 
@@ -163,7 +195,12 @@ async function resolveAddress(db: Db, address: string): Promise<LonLat> {
   return coords;
 }
 
-async function resolveRoute(db: Db, start: LonLat, end: LonLat): Promise<RouteSummary> {
+async function resolveRoute(
+  db: Db,
+  start: LonLat,
+  end: LonLat,
+  allowPaid: PaidGate
+): Promise<RouteSummary> {
   const key = [round6(start[0]), round6(start[1]), round6(end[0]), round6(end[1])].join(",");
   const { data: cached } = await db
     .from("route_cache")
@@ -177,16 +214,23 @@ async function resolveRoute(db: Db, start: LonLat, end: LonLat): Promise<RouteSu
   let route: RouteSummary | null = null;
   const failures: string[] = [];
 
-  const attempts: Array<() => Promise<RouteSummary>> = [() => osrmRoute(start, end)];
-  if (GEOAPIFY_KEY) attempts.push(() => geoapifyRoute(GEOAPIFY_KEY, start, end));
-  if (ORS_KEY) attempts.push(() => orsRoute(ORS_KEY, start, end));
+  try {
+    route = await osrmRoute(start, end);
+  } catch (err) {
+    failures.push((err as Error).message);
+  }
 
-  for (const attempt of attempts) {
-    try {
-      route = await attempt();
-      break;
-    } catch (err) {
-      failures.push((err as Error).message);
+  if (!route && (GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
+    const paidAttempts: Array<() => Promise<RouteSummary>> = [];
+    if (GEOAPIFY_KEY) paidAttempts.push(() => geoapifyRoute(GEOAPIFY_KEY, start, end));
+    if (ORS_KEY) paidAttempts.push(() => orsRoute(ORS_KEY, start, end));
+    for (const attempt of paidAttempts) {
+      try {
+        route = await attempt();
+        break;
+      } catch (err) {
+        failures.push((err as Error).message);
+      }
     }
   }
 
@@ -221,12 +265,48 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const [startCoords, endCoords] = await Promise.all([
-      resolveAddress(db, start),
-      resolveAddress(db, end),
+    const clientIp =
+      req.headers.get("cf-connecting-ip") ??
+      req.headers.get("x-real-ip") ??
+      (req.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
+
+    const ipHashBuffer = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(clientIp)
+    );
+    const ipHash = Array.from(new Uint8Array(ipHashBuffer))
+      .slice(0, 12)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const [ipAllowed, globalAllowed] = await Promise.all([
+      consumeQuota(db, `ip:${ipHash}`, IP_LIMIT_PER_HOUR, 3600),
+      consumeQuota(db, "global", GLOBAL_LIMIT_PER_DAY, 86400),
     ]);
 
-    const route = await resolveRoute(db, startCoords, endCoords);
+    if (!ipAllowed || !globalAllowed) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "The free calculator is temporarily rate limited. Please try again later or sign in for bulk calculations.",
+        }),
+        {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json", "Retry-After": "3600" },
+        }
+      );
+    }
+
+    // Shared daily budget for the operator's paid fallback providers.
+    const allowPaid: PaidGate = () =>
+      consumeQuota(db, "paid-fallback", PAID_FALLBACK_LIMIT_PER_DAY, 86400);
+
+    const [startCoords, endCoords] = await Promise.all([
+      resolveAddress(db, start, allowPaid),
+      resolveAddress(db, end, allowPaid),
+    ]);
+
+    const route = await resolveRoute(db, startCoords, endCoords, allowPaid);
 
     return json({
       distance_km: route.distance_m / 1000,

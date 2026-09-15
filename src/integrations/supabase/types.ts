@@ -107,6 +107,24 @@ export type Database = {
         }
         Relationships: []
       }
+      quick_distance_usage: {
+        Row: {
+          bucket_key: string
+          request_count: number
+          window_start: string
+        }
+        Insert: {
+          bucket_key: string
+          request_count?: number
+          window_start: string
+        }
+        Update: {
+          bucket_key?: string
+          request_count?: number
+          window_start?: string
+        }
+        Relationships: []
+      }
       route_cache: {
         Row: {
           created_at: string
@@ -208,6 +226,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      consume_quick_distance_quota: {
+        Args: {
+          p_bucket_key: string
+          p_limit: number
+          p_window_seconds: number
+        }
+        Returns: boolean
+      }
       deduct_credits: {
         Args: { p_amount: number; p_user_id: string }
         Returns: number

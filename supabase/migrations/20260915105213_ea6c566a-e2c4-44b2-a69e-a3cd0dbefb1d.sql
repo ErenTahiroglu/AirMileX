@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.consume_quick_distance_quota(text, integer, integer) FROM anon, authenticated;
