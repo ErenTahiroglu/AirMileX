@@ -195,7 +195,12 @@ async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Pro
   return coords;
 }
 
-async function resolveRoute(db: Db, start: LonLat, end: LonLat): Promise<RouteSummary> {
+async function resolveRoute(
+  db: Db,
+  start: LonLat,
+  end: LonLat,
+  allowPaid: PaidGate
+): Promise<RouteSummary> {
   const key = [round6(start[0]), round6(start[1]), round6(end[0]), round6(end[1])].join(",");
   const { data: cached } = await db
     .from("route_cache")
