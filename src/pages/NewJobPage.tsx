@@ -251,6 +251,8 @@ const NewJobPage = () => {
   };
 
   const noSettings = !hasPat;
+  const okCount = distances.filter((d) => d.status === "ok").length;
+  const failedCount = distances.filter((d) => d.status !== "ok").length;
 
   return (
     <div className="min-h-screen bg-background">
