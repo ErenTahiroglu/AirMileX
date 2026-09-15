@@ -237,14 +237,21 @@ const NewJobPage = () => {
         });
       }
 
+      setSyncedCount(result.synced ?? records.length);
+      setShowSummary(true);
       toast({ title: "Sync complete", description: `${result.synced ?? records.length} records updated.` });
     } catch (e: unknown) {
       const msg = (e as Error).message;
       if (msg.includes("402") || msg.includes("Insufficient credits")) {
         toast({
           title: "Not enough credits",
-          description: "You don't have enough credits for this sync. Buy more from the dashboard.",
+          description: "You don't have enough credits for this sync. Buy more credits to continue.",
           variant: "destructive",
+          action: (
+            <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
+              View plans
+            </ToastAction>
+          ),
         });
       } else {
         toast({ title: "Sync failed", description: msg, variant: "destructive" });
