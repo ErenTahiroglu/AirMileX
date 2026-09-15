@@ -149,7 +149,7 @@ async function consumeQuota(
   return data === true;
 }
 
-/** Open service first, keyed providers only as failover. */
+/** Keyed providers first (fast, SLA-backed); open services as failover when keys or budget run out. */
 async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Promise<LonLat> {
   const direct = parseCoordinates(address);
   if (direct) return direct;
@@ -165,14 +165,8 @@ async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Pro
   let coords: LonLat | null = null;
   const failures: string[] = [];
 
-  try {
-    coords = await nominatimGeocode(address);
-  } catch (err) {
-    failures.push((err as Error).message);
-  }
-
-  // Keyed (paid) providers are only tried while the daily fallback budget allows it.
-  if (!coords && (GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
+  // Keyed (paid) providers are primary while the daily budget allows it.
+  if ((GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
     const paidAttempts: Array<() => Promise<LonLat>> = [];
     if (GEOAPIFY_KEY) paidAttempts.push(() => geoapifyGeocode(GEOAPIFY_KEY, address));
     if (ORS_KEY) paidAttempts.push(() => orsGeocode(ORS_KEY, address));
@@ -183,6 +177,14 @@ async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Pro
       } catch (err) {
         failures.push((err as Error).message);
       }
+    }
+  }
+
+  if (!coords) {
+    try {
+      coords = await nominatimGeocode(address);
+    } catch (err) {
+      failures.push((err as Error).message);
     }
   }
 
@@ -214,13 +216,7 @@ async function resolveRoute(
   let route: RouteSummary | null = null;
   const failures: string[] = [];
 
-  try {
-    route = await osrmRoute(start, end);
-  } catch (err) {
-    failures.push((err as Error).message);
-  }
-
-  if (!route && (GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
+  if ((GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
     const paidAttempts: Array<() => Promise<RouteSummary>> = [];
     if (GEOAPIFY_KEY) paidAttempts.push(() => geoapifyRoute(GEOAPIFY_KEY, start, end));
     if (ORS_KEY) paidAttempts.push(() => orsRoute(ORS_KEY, start, end));
@@ -231,6 +227,14 @@ async function resolveRoute(
       } catch (err) {
         failures.push((err as Error).message);
       }
+    }
+  }
+
+  if (!route) {
+    try {
+      route = await osrmRoute(start, end);
+    } catch (err) {
+      failures.push((err as Error).message);
     }
   }
 
