@@ -123,6 +123,12 @@ async function orsRoute(apiKey: string, start: LonLat, end: LonLat): Promise<Rou
 const GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
 const ORS_KEY = Deno.env.get("OPENROUTESERVICE_API_KEY") ?? "";
 
+/** Abuse controls for this intentionally public endpoint. */
+const IP_LIMIT_PER_HOUR = 20;
+const GLOBAL_LIMIT_PER_DAY = 2000;
+/** Daily ceiling on calls that hit the operator's paid fallback providers. */
+const PAID_FALLBACK_LIMIT_PER_DAY = 300;
+
 type Db = ReturnType<typeof createClient>;
 
 /** Open service first, keyed providers only as failover. */
