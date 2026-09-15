@@ -130,9 +130,27 @@ const GLOBAL_LIMIT_PER_DAY = 2000;
 const PAID_FALLBACK_LIMIT_PER_DAY = 300;
 
 type Db = ReturnType<typeof createClient>;
+type PaidGate = () => Promise<boolean>;
+
+/** Atomic counter in the database; returns false once the bucket is over its limit. */
+async function consumeQuota(
+  db: Db,
+  bucketKey: string,
+  limit: number,
+  windowSeconds: number
+): Promise<boolean> {
+  const { data, error } = await db.rpc("consume_quick_distance_quota", {
+    p_bucket_key: bucketKey,
+    p_limit: limit,
+    p_window_seconds: windowSeconds,
+  });
+  // Fail closed: if the counter is unavailable we do not hand out free provider calls.
+  if (error) return false;
+  return data === true;
+}
 
 /** Open service first, keyed providers only as failover. */
-async function resolveAddress(db: Db, address: string): Promise<LonLat> {
+async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Promise<LonLat> {
   const direct = parseCoordinates(address);
   if (direct) return direct;
 
