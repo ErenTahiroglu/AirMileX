@@ -473,12 +473,13 @@ const NewJobPage = () => {
       </main>
 
       {/* Calculation summary */}
-      <Dialog open={showSummary} onOpenChange={setShowSummary}>
+      <Dialog open={showSummary && distances.length > 0} onOpenChange={setShowSummary}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Hesaplama özeti</DialogTitle>
             <DialogDescription>
               {okCount} satır başarıyla hesaplandı, {failedCount} satır doğrulanamadı.
+              {syncedCount !== null ? ` ${syncedCount} satır Airtable'a yazıldı.` : ""}
             </DialogDescription>
           </DialogHeader>
 
