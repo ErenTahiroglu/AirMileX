@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
 import { listBases, listTables, readRecords, syncRecords } from "@/services/airtable";
@@ -26,7 +26,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import { ToastAction } from "@/components/ui/toast";
 
 interface AirtableBase { id: string; name: string }
 interface AirtableTable { id: string; name: string; fields: AirtableField[] }
@@ -36,6 +38,7 @@ interface PreviewRecord { id: string; fields: Record<string, unknown> }
 const NewJobPage = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
@@ -53,6 +56,7 @@ const NewJobPage = () => {
   const [costCol, setCostCol] = useState("");
   const [statusCol, setStatusCol] = useState("");
   const [showSummary, setShowSummary] = useState(false);
+  const [syncedCount, setSyncedCount] = useState<number | null>(null);
   const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
   const [rateUnit, setRateUnit] = useState<RateUnit>("mi");
 
@@ -233,14 +237,21 @@ const NewJobPage = () => {
         });
       }
 
+      setSyncedCount(result.synced ?? records.length);
+      setShowSummary(true);
       toast({ title: "Sync complete", description: `${result.synced ?? records.length} records updated.` });
     } catch (e: unknown) {
       const msg = (e as Error).message;
       if (msg.includes("402") || msg.includes("Insufficient credits")) {
         toast({
           title: "Not enough credits",
-          description: "You don't have enough credits for this sync. Buy more from the dashboard.",
+          description: "You don't have enough credits for this sync. Buy more credits to continue.",
           variant: "destructive",
+          action: (
+            <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
+              View plans
+            </ToastAction>
+          ),
         });
       } else {
         toast({ title: "Sync failed", description: msg, variant: "destructive" });
@@ -462,12 +473,13 @@ const NewJobPage = () => {
       </main>
 
       {/* Calculation summary */}
-      <Dialog open={showSummary} onOpenChange={setShowSummary}>
+      <Dialog open={showSummary && distances.length > 0} onOpenChange={setShowSummary}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Hesaplama özeti</DialogTitle>
             <DialogDescription>
               {okCount} satır başarıyla hesaplandı, {failedCount} satır doğrulanamadı.
+              {syncedCount !== null ? ` ${syncedCount} satır Airtable'a yazıldı.` : ""}
             </DialogDescription>
           </DialogHeader>
 
@@ -508,6 +520,22 @@ const NewJobPage = () => {
               ? "Doğrulanamayan satırlar atlanır ve Airtable'daki durum sütununa 'Adres Bulunamadı' yazılır."
               : "Doğrulanamayan satırları Airtable'da işaretlemek için bir 'Status / Log' sütunu seçin."}
           </p>
+
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSummary(false);
+                setDistances([]);
+                setPreview([]);
+                setSyncedCount(null);
+                setSyncProgress({ synced: 0, total: 0 });
+              }}
+            >
+              Tabloyu temizle
+            </Button>
+            <Button onClick={() => navigate("/dashboard")}>Dashboard'a dön</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
