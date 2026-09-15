@@ -56,6 +56,7 @@ const NewJobPage = () => {
   const [costCol, setCostCol] = useState("");
   const [statusCol, setStatusCol] = useState("");
   const [showSummary, setShowSummary] = useState(false);
+  const [syncedCount, setSyncedCount] = useState<number | null>(null);
   const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
   const [rateUnit, setRateUnit] = useState<RateUnit>("mi");
 
