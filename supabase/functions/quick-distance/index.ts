@@ -214,16 +214,23 @@ async function resolveRoute(
   let route: RouteSummary | null = null;
   const failures: string[] = [];
 
-  const attempts: Array<() => Promise<RouteSummary>> = [() => osrmRoute(start, end)];
-  if (GEOAPIFY_KEY) attempts.push(() => geoapifyRoute(GEOAPIFY_KEY, start, end));
-  if (ORS_KEY) attempts.push(() => orsRoute(ORS_KEY, start, end));
+  try {
+    route = await osrmRoute(start, end);
+  } catch (err) {
+    failures.push((err as Error).message);
+  }
 
-  for (const attempt of attempts) {
-    try {
-      route = await attempt();
-      break;
-    } catch (err) {
-      failures.push((err as Error).message);
+  if (!route && (GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
+    const paidAttempts: Array<() => Promise<RouteSummary>> = [];
+    if (GEOAPIFY_KEY) paidAttempts.push(() => geoapifyRoute(GEOAPIFY_KEY, start, end));
+    if (ORS_KEY) paidAttempts.push(() => orsRoute(ORS_KEY, start, end));
+    for (const attempt of paidAttempts) {
+      try {
+        route = await attempt();
+        break;
+      } catch (err) {
+        failures.push((err as Error).message);
+      }
     }
   }
 
