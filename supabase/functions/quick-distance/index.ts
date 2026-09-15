@@ -265,12 +265,48 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const [startCoords, endCoords] = await Promise.all([
-      resolveAddress(db, start),
-      resolveAddress(db, end),
+    const clientIp =
+      req.headers.get("cf-connecting-ip") ??
+      req.headers.get("x-real-ip") ??
+      (req.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
+
+    const ipHashBuffer = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(clientIp)
+    );
+    const ipHash = Array.from(new Uint8Array(ipHashBuffer))
+      .slice(0, 12)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const [ipAllowed, globalAllowed] = await Promise.all([
+      consumeQuota(db, `ip:${ipHash}`, IP_LIMIT_PER_HOUR, 3600),
+      consumeQuota(db, "global", GLOBAL_LIMIT_PER_DAY, 86400),
     ]);
 
-    const route = await resolveRoute(db, startCoords, endCoords);
+    if (!ipAllowed || !globalAllowed) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "The free calculator is temporarily rate limited. Please try again later or sign in for bulk calculations.",
+        }),
+        {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json", "Retry-After": "3600" },
+        }
+      );
+    }
+
+    // Shared daily budget for the operator's paid fallback providers.
+    const allowPaid: PaidGate = () =>
+      consumeQuota(db, "paid-fallback", PAID_FALLBACK_LIMIT_PER_DAY, 86400);
+
+    const [startCoords, endCoords] = await Promise.all([
+      resolveAddress(db, start, allowPaid),
+      resolveAddress(db, end, allowPaid),
+    ]);
+
+    const route = await resolveRoute(db, startCoords, endCoords, allowPaid);
 
     return json({
       distance_km: route.distance_m / 1000,
