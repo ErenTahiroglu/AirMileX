@@ -99,6 +99,7 @@ function getServiceClient() {
   );
 }
 
+/** Verifies the bearer token server-side; body-supplied identities are ignored. */
 async function getUserIdFromAuth(req: Request): Promise<string> {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
@@ -112,11 +113,11 @@ async function getUserIdFromAuth(req: Request): Promise<string> {
   );
 
   const token = authHeader.replace("Bearer ", "");
-  const { data, error } = await supabase.auth.getClaims(token);
-  if (error || !data?.claims) {
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user?.id) {
     throw new Error("Unauthorized");
   }
-  return data.claims.sub as string;
+  return data.user.id;
 }
 
 async function getUserPat(userId: string): Promise<string> {
