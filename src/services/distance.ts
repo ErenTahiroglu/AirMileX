@@ -14,9 +14,14 @@ export interface DistanceResult {
   error?: string;
 }
 
+export interface CalculateDistancesResponse {
+  results: DistanceResult[];
+  credits_remaining?: number;
+}
+
 export const calculateDistances = async (
   pairs: AddressPair[]
-): Promise<{ results: DistanceResult[] }> => {
+): Promise<CalculateDistancesResponse> => {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Not authenticated");
 

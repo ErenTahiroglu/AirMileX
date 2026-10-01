@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowRight, Clock, Loader2, Route } from "lucide-react";
 import { quickDistance, type QuickDistanceResult } from "@/services/quickDistance";
@@ -48,28 +47,22 @@ const QuickMileageCalculator = () => {
       </CardHeader>
       <CardContent>
         <form onSubmit={handleCalculate} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="quick-start">Start address</Label>
-            <Input
-              id="quick-start"
-              value={start}
-              onChange={(e) => setStart(e.target.value)}
-              placeholder="Kadıköy, Istanbul"
-              required
-              maxLength={300}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="quick-end">End address</Label>
-            <Input
-              id="quick-end"
-              value={end}
-              onChange={(e) => setEnd(e.target.value)}
-              placeholder="Beşiktaş, Istanbul"
-              required
-              maxLength={300}
-            />
-          </div>
+          <AddressAutocomplete
+            id="quick-start"
+            label="Start address"
+            value={start}
+            onChange={setStart}
+            placeholder="Kadıköy, Istanbul"
+            required
+          />
+          <AddressAutocomplete
+            id="quick-end"
+            label="End address"
+            value={end}
+            onChange={setEnd}
+            placeholder="Beşiktaş, Istanbul"
+            required
+          />
 
           <fieldset className="flex items-center gap-2">
             <legend className="sr-only">Distance unit</legend>
