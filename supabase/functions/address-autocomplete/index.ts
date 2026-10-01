@@ -9,6 +9,10 @@ import {
   runChain,
   type AddressSuggestion,
 } from "../_shared/geo.ts";
+import {
+  selectAutocompleteProviders,
+  type AutocompleteProvider,
+} from "../_shared/autocomplete-providers.ts";
 
 const GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
 const ORS_KEY = Deno.env.get("OPENROUTESERVICE_API_KEY") ?? "";
@@ -89,17 +93,20 @@ serve(async (req) => {
       userId = data?.user?.id ?? null;
     }
 
-    const attempts: Array<() => Promise<AddressSuggestion[]>> = [];
-    if (
-      userId &&
-      (GEOAPIFY_KEY || ORS_KEY) &&
-      (await consumeQuota(db, `ac-user:${userId}`, 200, 86400)) &&
-      (await consumeQuota(db, "ac-paid", PAID_LIMIT_PER_DAY, 86400))
-    ) {
-      if (GEOAPIFY_KEY) attempts.push(() => geoapifyAutocomplete(GEOAPIFY_KEY, text));
-      if (ORS_KEY) attempts.push(() => orsAutocomplete(ORS_KEY, text));
-    }
-    attempts.push(() => nominatimAutocomplete(text));
+    const providers = await selectAutocompleteProviders({
+      userId,
+      hasGeoapifyKey: Boolean(GEOAPIFY_KEY),
+      hasOrsKey: Boolean(ORS_KEY),
+      consumePaidQuota: async () =>
+        (await consumeQuota(db, `ac-user:${userId}`, 200, 86400)) &&
+        (await consumeQuota(db, "ac-paid", PAID_LIMIT_PER_DAY, 86400)),
+    });
+    const runners: Record<AutocompleteProvider, () => Promise<AddressSuggestion[]>> = {
+      geoapify: () => geoapifyAutocomplete(GEOAPIFY_KEY, text),
+      ors: () => orsAutocomplete(ORS_KEY, text),
+      nominatim: () => nominatimAutocomplete(text),
+    };
+    const attempts = providers.map((p) => runners[p]);
 
     const suggestions = await runChain(attempts);
     return json({ suggestions: suggestions.filter((s) => s.label).slice(0, 5) });
