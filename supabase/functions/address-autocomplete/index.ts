@@ -79,9 +79,21 @@ serve(async (req) => {
     }
 
     const text = query.trim();
+
+    // Paid providers are reserved for verified signed-in users; anonymous visitors use the free provider only.
+    let userId: string | null = null;
+    const authHeader = req.headers.get("authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (token) {
+      const { data } = await db.auth.getUser(token);
+      userId = data?.user?.id ?? null;
+    }
+
     const attempts: Array<() => Promise<AddressSuggestion[]>> = [];
     if (
+      userId &&
       (GEOAPIFY_KEY || ORS_KEY) &&
+      (await consumeQuota(db, `ac-user:${userId}`, 200, 86400)) &&
       (await consumeQuota(db, "ac-paid", PAID_LIMIT_PER_DAY, 86400))
     ) {
       if (GEOAPIFY_KEY) attempts.push(() => geoapifyAutocomplete(GEOAPIFY_KEY, text));
