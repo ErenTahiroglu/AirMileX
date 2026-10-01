@@ -3,10 +3,10 @@
 // supabase function: mcp
 // Bundled from src/lib/mcp/index.ts by @lovable.dev/mcp-js.
 // src/lib/mcp/index.ts
-import { auth, defineMcp } from "npm:@lovable.dev/mcp-js@2.0.4";
+import { auth, defineMcp } from "npm:@lovable.dev/mcp-js@2.3.0";
 
 // src/lib/mcp/tools/get-account-status.ts
-import { defineTool } from "npm:@lovable.dev/mcp-js@2.0.4";
+import { defineTool } from "npm:@lovable.dev/mcp-js@2.3.0";
 
 // src/lib/mcp/supabase.ts
 import { createClient } from "npm:@supabase/supabase-js@^2.116.0";
@@ -93,7 +93,7 @@ var get_account_status_default = defineTool({
 });
 
 // src/lib/mcp/tools/list-calculation-logs.ts
-import { defineTool as defineTool2 } from "npm:@lovable.dev/mcp-js@2.0.4";
+import { defineTool as defineTool2 } from "npm:@lovable.dev/mcp-js@2.3.0";
 import { z } from "npm:zod@^3.25.76";
 var list_calculation_logs_default = defineTool2({
   name: "list_calculation_logs",
@@ -122,7 +122,7 @@ var list_calculation_logs_default = defineTool2({
 });
 
 // src/lib/mcp/tools/list-saved-mappings.ts
-import { defineTool as defineTool3 } from "npm:@lovable.dev/mcp-js@2.0.4";
+import { defineTool as defineTool3 } from "npm:@lovable.dev/mcp-js@2.3.0";
 var list_saved_mappings_default = defineTool3({
   name: "list_saved_mappings",
   title: "List saved column mappings",
@@ -161,5 +161,5 @@ var mcp_default = defineMcp({
 });
 
 // lovable-mcp-supabase-entry.ts
-import { createSupabaseHandler } from "npm:@lovable.dev/mcp-js@2.0.4/stacks/supabase";
+import { createSupabaseHandler } from "npm:@lovable.dev/mcp-js@2.3.0/stacks/supabase";
 Deno.serve(createSupabaseHandler(mcp_default, { functionName: "mcp" }));
