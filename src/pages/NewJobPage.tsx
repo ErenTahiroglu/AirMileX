@@ -176,7 +176,21 @@ const NewJobPage = () => {
         description: `${results.filter((r) => r.status === "ok").length} satır başarılı, ${results.filter((r) => r.status !== "ok").length} satır doğrulanamadı.`,
       });
     } catch (e: unknown) {
-      toast({ title: "Error", description: (e as Error).message, variant: "destructive" });
+      const msg = (e as Error).message;
+      if (msg.includes("402") || msg.includes("Insufficient credits")) {
+        toast({
+          title: "Not enough credits",
+          description: "You don't have enough credits for this calculation. Buy more credits to continue.",
+          variant: "destructive",
+          action: (
+            <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
+              View plans
+            </ToastAction>
+          ),
+        });
+      } else {
+        toast({ title: "Error", description: msg, variant: "destructive" });
+      }
     } finally {
       setCalculating(false);
     }
@@ -241,21 +255,7 @@ const NewJobPage = () => {
       setShowSummary(true);
       toast({ title: "Sync complete", description: `${result.synced ?? records.length} records updated.` });
     } catch (e: unknown) {
-      const msg = (e as Error).message;
-      if (msg.includes("402") || msg.includes("Insufficient credits")) {
-        toast({
-          title: "Not enough credits",
-          description: "You don't have enough credits for this sync. Buy more credits to continue.",
-          variant: "destructive",
-          action: (
-            <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
-              View plans
-            </ToastAction>
-          ),
-        });
-      } else {
-        toast({ title: "Sync failed", description: msg, variant: "destructive" });
-      }
+      toast({ title: "Sync failed", description: (e as Error).message, variant: "destructive" });
     } finally {
       setSyncing(false);
     }

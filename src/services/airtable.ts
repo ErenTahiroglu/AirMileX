@@ -46,7 +46,8 @@ export interface SyncPayload {
 
 export interface SyncResult {
   synced: number;
-  credits_remaining?: number;
+  failed: number;
+  errors: string[];
 }
 
 /** Airtable allows 5 records per write; batches are spaced out to avoid 429s. */
@@ -55,7 +56,7 @@ const AIRTABLE_BATCH_DELAY_MS = 250;
 
 /**
  * Writes records back to Airtable in rate-limited batches of 5,
- * pausing 250ms between batches.
+ * pausing 250ms between batches. Does not touch credits.
  */
 export const syncRecords = async (
   payload: SyncPayload,
@@ -63,7 +64,7 @@ export const syncRecords = async (
 ): Promise<SyncResult> => {
   const { records, ...target } = payload;
 
-  const batchResults = await runBatched(
+  const batchResults = (await runBatched(
     records,
     (batch) => callProxy("sync-records", { ...target, records: batch }),
     {
@@ -71,15 +72,15 @@ export const syncRecords = async (
       delayMs: AIRTABLE_BATCH_DELAY_MS,
       onProgress,
     }
+  )) as Array<Partial<SyncResult> | undefined>;
+
+  return batchResults.reduce<SyncResult>(
+    (acc, r) => ({
+      synced: acc.synced + (r?.synced ?? 0),
+      failed: acc.failed + (r?.failed ?? 0),
+      errors: [...acc.errors, ...(r?.errors ?? [])],
+    }),
+    { synced: 0, failed: 0, errors: [] }
   );
-
-  const synced = batchResults.reduce(
-    (total: number, result: SyncResult | undefined) => total + (result?.synced ?? 0),
-    0
-  );
-
-  const last = batchResults[batchResults.length - 1] as SyncResult | undefined;
-
-  return { synced, credits_remaining: last?.credits_remaining };
 };
 
