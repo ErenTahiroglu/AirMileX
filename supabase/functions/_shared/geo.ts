@@ -92,7 +92,7 @@ export function parseCoordinates(text: string): LonLat | null {
   return [lon, lat];
 }
 
-const USER_AGENT = "AirMileX/1.0 (mileage calculator)";
+const USER_AGENT = "AirMileX/1.0 (+https://airmilex.lovable.app)";
 
 // ---------------------------------------------------------------- geocoding
 
@@ -118,7 +118,7 @@ export async function orsGeocode(apiKey: string, address: string): Promise<LonLa
 
 export async function nominatimGeocode(address: string): Promise<LonLat> {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
-  const res = await fetchWithTimeout("Nominatim", url, { headers: { "User-Agent": USER_AGENT } }, 2500);
+  const res = await fetchWithTimeout("Nominatim", url, { headers: { "User-Agent": USER_AGENT, Referer: "https://airmilex.lovable.app/" } }, 2500);
   if (!res.ok) throw httpError("Nominatim", res.status);
   const data = await res.json();
   const hit = data?.[0];
@@ -164,7 +164,7 @@ export async function orsRoute(apiKey: string, start: LonLat, end: LonLat): Prom
 
 export async function osrmRoute(start: LonLat, end: LonLat): Promise<RouteSummary> {
   const url = `https://router.project-osrm.org/route/v1/driving/${start[0]},${start[1]};${end[0]},${end[1]}?overview=false`;
-  const res = await fetchWithTimeout("OSRM", url, { headers: { "User-Agent": USER_AGENT } }, 2500);
+  const res = await fetchWithTimeout("OSRM", url, { headers: { "User-Agent": USER_AGENT, Referer: "https://airmilex.lovable.app/" } }, 2500);
   if (!res.ok) throw httpError("OSRM", res.status);
   const data = await res.json();
   const route = data.routes?.[0];
@@ -206,7 +206,7 @@ export async function orsAutocomplete(
 
 export async function nominatimAutocomplete(text: string): Promise<AddressSuggestion[]> {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(text)}`;
-  const res = await fetchWithTimeout("Nominatim", url, { headers: { "User-Agent": USER_AGENT } }, 2500);
+  const res = await fetchWithTimeout("Nominatim", url, { headers: { "User-Agent": USER_AGENT, Referer: "https://airmilex.lovable.app/" } }, 2500);
   if (!res.ok) throw httpError("Nominatim", res.status);
   const data = await res.json();
   return (data ?? []).map((hit: Record<string, string>) => ({
