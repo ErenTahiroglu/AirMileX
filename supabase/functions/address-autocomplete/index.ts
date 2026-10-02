@@ -109,11 +109,10 @@ serve(async (req) => {
     const attempts = providers.map((p) => runners[p]);
 
     const suggestions = await runChain(attempts);
-    return json({ suggestions: suggestions.filter((s) => s.label).slice(0, 5) });
+    return json({ suggestions: suggestions.filter((s) => s.label).slice(0, 5), providers });
   } catch (err) {
-    if (err instanceof ProviderError && !err.retryable) {
-      return json({ suggestions: [] });
-    }
+    // Fail soft for the UI but keep a trace for diagnosis.
+    console.error("address-autocomplete failed:", err instanceof ProviderError ? `${err.message} (retryable=${err.retryable})` : err);
     return json({ suggestions: [] });
   }
 });

@@ -1,0 +1,15 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # Checks resolved lockfile versions against known advisories
+      - run: curl -sSfL https://github.com/google/osv-scanner/releases/download/v2.2.2/osv-scanner_linux_amd64 -o osv && chmod +x osv && ./osv scan source --lockfile=bun.lock
+      - run: bunx vitest run
+      - run: bun run build

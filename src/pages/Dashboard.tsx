@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import AddressCleaner from "@/components/AddressCleaner";
 
 const Dashboard = () => {
   const { user, signOut } = useAuth();
@@ -110,6 +111,11 @@ const Dashboard = () => {
             </CardContent>
           </Card>
         </div>
+
+        <section aria-labelledby="cleaner-heading">
+          <h2 id="cleaner-heading" className="sr-only">Address cleaner</h2>
+          <AddressCleaner />
+        </section>
 
         {logs.length > 0 && (
           <section aria-labelledby="recent-syncs-heading">
