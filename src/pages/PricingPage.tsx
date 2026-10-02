@@ -16,7 +16,7 @@ const PricingPage = () => {
 
   const handleBuy = async () => {
     if (!user) {
-      navigate("/auth");
+      navigate("/?next=/pricing");
       return;
     }
     setBuying(true);
