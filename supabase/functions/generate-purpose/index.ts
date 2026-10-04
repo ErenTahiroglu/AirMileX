@@ -50,7 +50,6 @@ Deno.serve(async (req) => {
     return json({ error: e.message }, e.status ?? 500);
   }
 
-  let failed = 0;
   for (const { key, hash } of missing) {
     try {
       const out = (await completeJson(SYSTEM, `Trip note: ${key}`)) as { purpose?: unknown };
@@ -59,12 +58,12 @@ Deno.serve(async (req) => {
       results.set(key, purpose);
       await putCached(db, hash, "purpose", purpose);
     } catch (err) {
-      failed++;
       if (err instanceof AiError && err.status === 429) break;
     }
   }
   // Refund credits for notes that produced nothing (never more than reserved).
-  await refundCredits(db, userId, Math.min(reserved, failed + (missing.length - failed - [...missing].filter((m) => results.has(m.key)).length)));
+  const produced = missing.filter((m) => results.has(m.key)).length;
+  await refundCredits(db, userId, Math.min(reserved, missing.length - produced));
 
   return json({ purposes: notes.map((n) => results.get(normalize(n)) ?? null) });
 });
