@@ -38,6 +38,27 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_cache: {
+        Row: {
+          created_at: string
+          feature_type: string
+          prompt_hash: string
+          response_text: string
+        }
+        Insert: {
+          created_at?: string
+          feature_type: string
+          prompt_hash: string
+          response_text: string
+        }
+        Update: {
+          created_at?: string
+          feature_type?: string
+          prompt_hash?: string
+          response_text?: string
+        }
+        Relationships: []
+      }
       calculation_logs: {
         Row: {
           base_id: string
@@ -146,12 +167,41 @@ export type Database = {
         }
         Relationships: []
       }
+      saved_address_pairs: {
+        Row: {
+          created_at: string
+          end_address: string
+          id: string
+          label: string
+          start_address: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          end_address: string
+          id?: string
+          label: string
+          start_address: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          end_address?: string
+          id?: string
+          label?: string
+          start_address?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       saved_mappings: {
         Row: {
           cost_col_id: string | null
           distance_col_id: string
           end_col_id: string
           id: string
+          notes_col_id: string | null
+          purpose_col_id: string | null
           rate_per_unit: number
           rate_unit: string
           start_col_id: string
@@ -164,6 +214,8 @@ export type Database = {
           distance_col_id: string
           end_col_id: string
           id?: string
+          notes_col_id?: string | null
+          purpose_col_id?: string | null
           rate_per_unit?: number
           rate_unit?: string
           start_col_id: string
@@ -176,6 +228,8 @@ export type Database = {
           distance_col_id?: string
           end_col_id?: string
           id?: string
+          notes_col_id?: string | null
+          purpose_col_id?: string | null
           rate_per_unit?: number
           rate_unit?: string
           start_col_id?: string
