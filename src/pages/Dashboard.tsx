@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import AddressCleaner from "@/components/AddressCleaner";
+import SavedAddressPairs from "@/components/SavedAddressPairs";
+import QuickMileageCalculator, { type RoutePrefill } from "@/components/QuickMileageCalculator";
 
 const Dashboard = () => {
   const { user, signOut } = useAuth();
@@ -18,6 +20,7 @@ const Dashboard = () => {
   const [logs, setLogs] = useState<CalculationLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [buyingCredits, setBuyingCredits] = useState(false);
+  const [prefill, setPrefill] = useState<RoutePrefill | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -111,6 +114,17 @@ const Dashboard = () => {
             </CardContent>
           </Card>
         </div>
+
+        {user && (
+          <section aria-labelledby="routes-heading" className="grid gap-4 lg:grid-cols-2">
+            <h2 id="routes-heading" className="sr-only">Saved routes</h2>
+            <SavedAddressPairs
+              userId={user.id}
+              onUse={(p) => setPrefill({ start: p.start_address, end: p.end_address, nonce: Date.now() })}
+            />
+            <QuickMileageCalculator prefill={prefill} hideUpsell />
+          </section>
+        )}
 
         <section aria-labelledby="cleaner-heading">
           <h2 id="cleaner-heading" className="sr-only">Address cleaner</h2>
