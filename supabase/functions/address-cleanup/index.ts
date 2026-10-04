@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { buildCorsHeaders } from "../_shared/cors.ts";
+import { AiError, chargeAiOps, completeJson, getCached, putCached, refundCredits, sha256 } from "../_shared/ai.ts";
+import { geoapifyGeocode, nominatimGeocode, runChain, type LonLat } from "../_shared/geo.ts";
 import { createLovableAiGatewayRunIdFetch, getLovableAiGatewayRunId } from "./run-id.ts";
 
 const MODEL = "openai/gpt-6-astra";
@@ -59,6 +61,50 @@ async function readStreamText(res: Response): Promise<string> {
   return text;
 }
 
+const FIX_SYSTEM = `You correct street addresses that a map search could not find (typos, missing city, wrong order, abbreviations).
+Return ONLY {"start":[string],"end":[string]} with 1-2 corrected variants each, most likely first.
+Only fix spelling/format and add city/region/country implied by the other address. Never invent house numbers or new streets.`;
+
+interface VerifiedAddress { address: string; lat: number; lon: number }
+
+async function verify(address: string): Promise<VerifiedAddress | null> {
+  const key = Deno.env.get("GEOAPIFY_API_KEY");
+  const attempts: Array<() => Promise<LonLat>> = [() => nominatimGeocode(address)];
+  if (key) attempts.push(() => geoapifyGeocode(key, address));
+  try {
+    const [lon, lat] = await runChain(attempts);
+    return { address, lat, lon };
+  } catch {
+    return null;
+  }
+}
+
+const toList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).slice(0, 2) : [];
+
+/** Suggests map-verified corrections for an address pair that failed geocoding. */
+async function handleFix(db: ReturnType<typeof createClient>, userId: string, start: string, end: string) {
+  const hash = await sha256(`fix:v1:${start.toLowerCase()}|${end.toLowerCase()}`);
+  const cached = await getCached(db, hash);
+  let raw: { start: string[]; end: string[] };
+  if (cached) {
+    raw = JSON.parse(cached);
+  } else {
+    const reserved = await chargeAiOps(db, userId, 1);
+    try {
+      const out = (await completeJson(FIX_SYSTEM, `Start: ${start}\nEnd: ${end}`)) as Record<string, unknown>;
+      raw = { start: toList(out.start), end: toList(out.end) };
+      await putCached(db, hash, "fix_address", JSON.stringify(raw));
+    } catch (err) {
+      await refundCredits(db, userId, reserved);
+      throw err;
+    }
+  }
+  const check = async (list: string[]) => (await Promise.all(list.map(verify))).filter((v): v is VerifiedAddress => !!v);
+  const [s, e] = await Promise.all([check(raw.start), check(raw.end)]);
+  return { start: s, end: e };
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = buildCorsHeaders(req);
   const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
@@ -75,9 +121,10 @@ Deno.serve(async (req) => {
   const userId = userData?.user?.id;
   if (!userId) return json({ error: "Please sign in to use the address cleaner." }, 401);
 
-  let start: string, end: string;
+  let start: string, end: string, mode: string;
   try {
     const body = await req.json();
+    mode = body.mode === "fix" ? "fix" : "clean";
     start = typeof body.start === "string" ? body.start.trim() : "";
     end = typeof body.end === "string" ? body.end.trim() : "";
   } catch {
@@ -85,6 +132,15 @@ Deno.serve(async (req) => {
   }
   if (!start || !end) return json({ error: "Enter both a start and an end note." }, 400);
   if (start.length > 300 || end.length > 300) return json({ error: "Notes must be under 300 characters." }, 400);
+
+  if (mode === "fix") {
+    try {
+      return json(await handleFix(db, userId, start, end));
+    } catch (err) {
+      const e = err as AiError;
+      return json({ error: e.message || "Could not suggest corrections." }, e.status ?? 500);
+    }
+  }
 
   const { data: allowed } = await db.rpc("consume_quick_distance_quota", {
     p_bucket_key: `cleanup:${userId}`,
