@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import AddressAutocomplete from "@/components/AddressAutocomplete";
@@ -8,7 +8,20 @@ import { quickDistance, type QuickDistanceResult } from "@/services/quickDistanc
 
 type Unit = "km" | "mi";
 
-const QuickMileageCalculator = () => {
+export interface RoutePrefill {
+  start: string;
+  end: string;
+  /** Changes on every request so the same route can be loaded twice. */
+  nonce: number;
+}
+
+interface Props {
+  prefill?: RoutePrefill | null;
+  /** Hide the sign-up upsell (e.g. for signed-in users on the Dashboard). */
+  hideUpsell?: boolean;
+}
+
+const QuickMileageCalculator = ({ prefill, hideUpsell = false }: Props) => {
   const navigate = useNavigate();
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -17,19 +30,30 @@ const QuickMileageCalculator = () => {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<QuickDistanceResult | null>(null);
 
-  const handleCalculate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const run = async (from: string, to: string) => {
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      setResult(await quickDistance(start, end));
+      setResult(await quickDistance(from, to));
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
     }
   };
+
+  const handleCalculate = (e: React.FormEvent) => {
+    e.preventDefault();
+    run(start, end);
+  };
+
+  useEffect(() => {
+    if (!prefill) return;
+    setStart(prefill.start);
+    setEnd(prefill.end);
+    run(prefill.start, prefill.end);
+  }, [prefill]);
 
   const distance = result
     ? unit === "km"
@@ -127,6 +151,7 @@ const QuickMileageCalculator = () => {
               </div>
             </div>
 
+            {!hideUpsell && (
             <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
               <p className="text-sm text-foreground">
                 Want to do this for hundreds of rows in your Airtable table with one click?
@@ -137,6 +162,7 @@ const QuickMileageCalculator = () => {
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
+            )}
           </div>
         )}
       </CardContent>
