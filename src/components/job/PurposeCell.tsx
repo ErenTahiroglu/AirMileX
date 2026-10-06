@@ -35,7 +35,7 @@ const PurposeCell = ({ purpose, initialNote, onChange, onError }: Props) => {
 
   return (
     <div className="flex items-start gap-1">
-      <span className="text-xs">{purpose ?? <span className="text-muted-foreground">—</span>}</span>
+      {purpose !== undefined && <span className="text-xs">{purpose}</span>}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" aria-label="Draft business purpose with AI">

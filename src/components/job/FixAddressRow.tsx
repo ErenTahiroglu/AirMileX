@@ -43,7 +43,12 @@ const FixAddressRow = ({ start, end, onApply, onError }: Props) => {
   }
 
   const none = result.start.length === 0 && result.end.length === 0;
-  if (none) return <p className="text-xs text-muted-foreground">No map-verified fix found. Edit the address in Airtable.</p>;
+  if (none) return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">No map-verified fix found. Edit the address in Airtable.</p>
+      <Button size="sm" variant="ghost" onClick={() => setResult(null)}>Vazgeç</Button>
+    </div>
+  );
 
   const Options = ({ label, list, picked, setPicked, original }: {
     label: string; list: { address: string }[]; picked: string | null; setPicked: (v: string) => void; original: string;
@@ -63,16 +68,21 @@ const FixAddressRow = ({ start, end, onApply, onError }: Props) => {
     <div className="space-y-2">
       <Options label="Start" list={result.start} picked={pickStart ?? start} setPicked={setPickStart} original={start} />
       <Options label="End" list={result.end} picked={pickEnd ?? end} setPicked={setPickEnd} original={end} />
-      <Button
-        size="sm"
-        disabled={applying}
-        onClick={async () => {
-          setApplying(true);
-          try { await onApply(pickStart ?? start, pickEnd ?? end); } finally { setApplying(false); }
-        }}
-      >
-        {applying ? "Recalculating..." : "Use and recalculate"}
-      </Button>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={applying}
+          onClick={async () => {
+            setApplying(true);
+            try { await onApply(pickStart ?? start, pickEnd ?? end); } finally { setApplying(false); }
+          }}
+        >
+          {applying ? "Recalculating..." : "Uygula"}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={applying} onClick={() => setResult(null)}>
+          Vazgeç
+        </Button>
+      </div>
     </div>
   );
 };
