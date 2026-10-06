@@ -12,6 +12,7 @@ export interface DistanceResult {
   distance_mi: number;
   status: "ok" | "error";
   error?: string;
+  purposeText?: string;
 }
 
 export interface CalculateDistancesResponse {
