@@ -57,6 +57,7 @@ async function syncWithBatching(
         id: r.id,
         fields: r.fields ?? { [distanceFieldId]: r.value },
       })),
+      typecast: true,
     };
 
     let attempt = 0;

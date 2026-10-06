@@ -12,6 +12,8 @@ export interface DistanceResult {
   distance_mi: number;
   status: "ok" | "error";
   error?: string;
+  /** Frontend-only: AI-drafted business purpose for this row. */
+  purposeText?: string;
 }
 
 export interface CalculateDistancesResponse {
