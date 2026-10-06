@@ -66,6 +66,7 @@ const NewJobPage = () => {
   const [statusCol, setStatusCol] = useState("");
   const [notesCol, setNotesCol] = useState("");
   const [purposeCol, setPurposeCol] = useState("");
+  const [mappingLoadedFor, setMappingLoadedFor] = useState<string | null>(null);
   const [showSummary, setShowSummary] = useState(false);
   const [syncedCount, setSyncedCount] = useState<number | null>(null);
   const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
@@ -122,15 +123,30 @@ const NewJobPage = () => {
       .finally(() => setLoadingTables(false));
   }, [hasPat, selectedBase]);
 
-  // On table select: load fields + check saved mappings
+  // On table select: load fields + check saved mappings.
+  // Reset first so a previous table's mapping can never be upserted into the new table
+  // while the async saved-mapping lookup is still in flight.
   useEffect(() => {
     if (!selectedTable) return;
+    let cancelled = false;
     const table = tables.find((t) => t.id === selectedTable);
     if (table) setFields(table.fields ?? []);
 
-    if (!user) return;
-    getMapping(user.id, selectedTable).then((m) => {
-      if (m) {
+    setMappingLoadedFor(null);
+    setStartCol("");
+    setEndCol("");
+    setDistanceCol("");
+    setCostCol("");
+    setStatusCol("");
+    setNotesCol("");
+    setPurposeCol("");
+    setRatePerUnit(DEFAULT_RATE_PER_MILE);
+    setRateUnit("mi");
+
+    if (!user) return () => { cancelled = true; };
+    getMapping(user.id, selectedTable)
+      .then((m) => {
+        if (cancelled || !m) return;
         setStartCol(m.start_col_id);
         setEndCol(m.end_col_id);
         setDistanceCol(m.distance_col_id);
@@ -140,13 +156,22 @@ const NewJobPage = () => {
         setPurposeCol(m.purpose_col_id ?? "");
         setRatePerUnit(m.rate_per_unit);
         setRateUnit(m.rate_unit);
-      }
-    });
-  }, [selectedTable, tables, user]);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          toast({ title: "Error loading saved mapping", description: e.message, variant: "destructive" });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMappingLoadedFor(selectedTable);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedTable, tables, user, toast]);
 
   // Save mapping when cols or rate settings change
   useEffect(() => {
-    if (!user || !selectedTable || !startCol || !endCol || !distanceCol) return;
+    if (!user || !selectedTable || mappingLoadedFor !== selectedTable || !startCol || !endCol || !distanceCol) return;
     upsertMapping({
       user_id: user.id,
       table_id: selectedTable,
@@ -160,7 +185,7 @@ const NewJobPage = () => {
       rate_per_unit: ratePerUnit,
       rate_unit: rateUnit,
     }).catch(() => {});
-  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, notesCol, purposeCol, ratePerUnit, rateUnit]);
+  }, [user, selectedTable, mappingLoadedFor, startCol, endCol, distanceCol, costCol, statusCol, notesCol, purposeCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
     if (!distanceCol) return;
