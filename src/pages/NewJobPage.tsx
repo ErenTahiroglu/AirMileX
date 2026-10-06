@@ -1,4 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import PurposeCell from "@/components/job/PurposeCell";
+import FixAddressRow from "@/components/job/FixAddressRow";
+import { generatePurposes, AiAssistError } from "@/services/aiAssist";
+import { buildSyncRecords } from "@/lib/jobSync";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
@@ -59,9 +63,16 @@ const NewJobPage = () => {
   const [syncedCount, setSyncedCount] = useState<number | null>(null);
   const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
   const [rateUnit, setRateUnit] = useState<RateUnit>("mi");
+  const [notesCol, setNotesCol] = useState("");
+  const [purposeCol, setPurposeCol] = useState("");
+  // Table whose saved mapping finished loading; guards against cross-table upserts.
+  const hydratedTableRef = useRef<string | null>(null);
 
   const [preview, setPreview] = useState<PreviewRecord[]>([]);
   const [distances, setDistances] = useState<DistanceResult[]>([]);
+  const [purposes, setPurposes] = useState<Record<string, string>>({});
+  const [overrides, setOverrides] = useState<Record<string, { start: string; end: string }>>({});
+  const [generatingPurposes, setGeneratingPurposes] = useState(false);
 
   const [loadingBases, setLoadingBases] = useState(false);
   const [loadingTables, setLoadingTables] = useState(false);
@@ -104,29 +115,44 @@ const NewJobPage = () => {
       .finally(() => setLoadingTables(false));
   }, [hasPat, selectedBase]);
 
-  // On table select: load fields + check saved mappings
+  // On table select: reset old mapping, load fields + saved mapping for the new table.
   useEffect(() => {
+    hydratedTableRef.current = null; // blocks upserts until this table's mapping is loaded
+    setStartCol(""); setEndCol(""); setDistanceCol(""); setCostCol(""); setStatusCol("");
+    setNotesCol(""); setPurposeCol("");
+    setRatePerUnit(DEFAULT_RATE_PER_MILE); setRateUnit("mi");
+    setPreview([]); setDistances([]); setPurposes({}); setOverrides({});
     if (!selectedTable) return;
     const table = tables.find((t) => t.id === selectedTable);
     if (table) setFields(table.fields ?? []);
 
     if (!user) return;
-    getMapping(user.id, selectedTable).then((m) => {
-      if (m) {
-        setStartCol(m.start_col_id);
-        setEndCol(m.end_col_id);
-        setDistanceCol(m.distance_col_id);
-        setCostCol(m.cost_col_id ?? "");
-        setStatusCol(m.status_col_id ?? "");
-        setRatePerUnit(m.rate_per_unit);
-        setRateUnit(m.rate_unit);
-      }
-    });
+    const tableId = selectedTable;
+    let cancelled = false;
+    getMapping(user.id, tableId)
+      .then((m) => {
+        if (cancelled) return;
+        if (m) {
+          setStartCol(m.start_col_id);
+          setEndCol(m.end_col_id);
+          setDistanceCol(m.distance_col_id);
+          setCostCol(m.cost_col_id ?? "");
+          setStatusCol(m.status_col_id ?? "");
+          setNotesCol(m.notes_col_id ?? "");
+          setPurposeCol(m.purpose_col_id ?? "");
+          setRatePerUnit(m.rate_per_unit);
+          setRateUnit(m.rate_unit);
+        }
+        hydratedTableRef.current = tableId;
+      })
+      .catch(() => { if (!cancelled) hydratedTableRef.current = tableId; });
+    return () => { cancelled = true; };
   }, [selectedTable, tables, user]);
 
-  // Save mapping when cols or rate settings change
+  // Save mapping when cols or rate settings change (only after hydration for this table).
   useEffect(() => {
     if (!user || !selectedTable || !startCol || !endCol || !distanceCol) return;
+    if (hydratedTableRef.current !== selectedTable) return;
     upsertMapping({
       user_id: user.id,
       table_id: selectedTable,
@@ -135,10 +161,12 @@ const NewJobPage = () => {
       distance_col_id: distanceCol,
       cost_col_id: costCol || null,
       status_col_id: statusCol || null,
+      notes_col_id: notesCol || null,
+      purpose_col_id: purposeCol || null,
       rate_per_unit: ratePerUnit,
       rate_unit: rateUnit,
     }).catch(() => {});
-  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, ratePerUnit, rateUnit]);
+  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, notesCol, purposeCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
     if (!distanceCol) return;
@@ -154,18 +182,86 @@ const NewJobPage = () => {
     }
   };
 
+  const fieldName = (id: string) => fields.find((f) => f.id === id)?.name ?? id;
+
+  /** Current addresses for a row, including AI fixes the user applied. */
+  const addressesOf = (r: PreviewRecord) =>
+    overrides[r.id] ?? {
+      start: String(r.fields[fieldName(startCol)] ?? ""),
+      end: String(r.fields[fieldName(endCol)] ?? ""),
+    };
+
+  const noteOf = (r: PreviewRecord) => (notesCol ? String(r.fields[fieldName(notesCol)] ?? "") : "");
+
+  const setPurpose = (recordId: string, purpose: string) =>
+    setPurposes((prev) => ({ ...prev, [recordId]: purpose }));
+
+  const showCreditsToast = (description: string) =>
+    toast({
+      title: "Not enough credits",
+      description,
+      variant: "destructive",
+      action: (
+        <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
+          View plans
+        </ToastAction>
+      ),
+    });
+
+  const showAiError = (message: string, status: number) => {
+    if (status === 402) showCreditsToast("AI credits are used up. Buy more credits to keep using AI features.");
+    else if (status === 429) toast({ title: "Too many AI requests", description: message, variant: "destructive" });
+    else toast({ title: "AI error", description: message, variant: "destructive" });
+  };
+
+  /** Bulk mode: drafts purposes for every row with a note. Never fails the distance job. */
+  const draftBulkPurposes = async () => {
+    if (!notesCol) return;
+    const rows = preview.map((r) => ({ id: r.id, note: noteOf(r).trim() })).filter((x) => x.note);
+    if (!rows.length) return;
+    setGeneratingPurposes(true);
+    try {
+      const result = await generatePurposes(rows.map((x) => x.note));
+      setPurposes((prev) => {
+        const next = { ...prev };
+        rows.forEach((x, i) => { if (result[i]) next[x.id] = result[i] as string; });
+        return next;
+      });
+    } catch (err) {
+      const e = err as AiAssistError;
+      showAiError(e.message, e.status ?? 500);
+    } finally {
+      setGeneratingPurposes(false);
+    }
+  };
+
+  /** After an AI fix is applied: recalculate only this row; error stays unless routing succeeds. */
+  const recalculateRow = async (recordId: string, start: string, end: string) => {
+    setOverrides((prev) => ({ ...prev, [recordId]: { start, end } }));
+    try {
+      const result = await calculateDistances([{ record_id: recordId, start, end }]);
+      const fresh = result.results?.[0];
+      if (fresh?.status === "ok") {
+        setDistances((prev) => prev.map((d) => (d.record_id === recordId ? fresh : d)));
+        toast({ title: "Row fixed", description: `${fresh.distance_mi.toFixed(2)} mi calculated.` });
+      } else {
+        toast({ title: "Still not routable", description: fresh?.error ?? "Adres Bulunamadı", variant: "destructive" });
+      }
+    } catch (e: unknown) {
+      const msg = (e as Error).message;
+      if (msg.includes("402") || msg.includes("Insufficient credits")) {
+        showCreditsToast("You don't have enough credits for this calculation. Buy more credits to continue.");
+      } else {
+        toast({ title: "Error", description: msg, variant: "destructive" });
+      }
+    }
+  };
+
   const handleCalculate = async () => {
     if (!preview.length || !startCol || !endCol) return;
     setCalculating(true);
     try {
-      const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
-      const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
-
-      const pairs: AddressPair[] = preview.map((r) => ({
-        record_id: r.id,
-        start: String(r.fields[startField] ?? ""),
-        end: String(r.fields[endField] ?? ""),
-      }));
+      const pairs: AddressPair[] = preview.map((r) => ({ record_id: r.id, ...addressesOf(r) }));
 
       const result = await calculateDistances(pairs);
       const results = result.results ?? [];
@@ -175,19 +271,11 @@ const NewJobPage = () => {
         title: "Hesaplama tamamlandı",
         description: `${results.filter((r) => r.status === "ok").length} satır başarılı, ${results.filter((r) => r.status !== "ok").length} satır doğrulanamadı.`,
       });
+      void draftBulkPurposes();
     } catch (e: unknown) {
       const msg = (e as Error).message;
       if (msg.includes("402") || msg.includes("Insufficient credits")) {
-        toast({
-          title: "Not enough credits",
-          description: "You don't have enough credits for this calculation. Buy more credits to continue.",
-          variant: "destructive",
-          action: (
-            <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
-              View plans
-            </ToastAction>
-          ),
-        });
+        showCreditsToast("You don't have enough credits for this calculation. Buy more credits to continue.");
       } else {
         toast({ title: "Error", description: msg, variant: "destructive" });
       }
@@ -200,34 +288,19 @@ const NewJobPage = () => {
     if (!distances.length) return;
     setSyncing(true);
 
-    const fieldName = (id: string) => fields.find((f) => f.id === id)?.name ?? id;
     const distField = fieldName(distanceCol);
-    const costField = costCol ? fieldName(costCol) : null;
-    const statusField = statusCol ? fieldName(statusCol) : null;
-
-    const successResults = distances.filter((d) => d.status === "ok");
-    const failedResults = distances.filter((d) => d.status !== "ok");
-
-    // Successful rows: distance (+ reimbursement) written in a single update.
-    const records = successResults.map((d) => {
-      const values: Record<string, string | number> = {
-        [distField]: `${d.distance_mi.toFixed(2)} mi`,
-      };
-      if (costField) {
-        values[costField] = Number(
-          calculateReimbursement(d.distance_mi, ratePerUnit, rateUnit).toFixed(2)
-        );
-      }
-      if (statusField) values[statusField] = "Hesaplandı";
-      return { id: d.record_id, fields: values };
-    });
-
-    // Failed rows are skipped, not fatal: only the status/log column is marked.
-    if (statusField) {
-      failedResults.forEach((d) => {
-        records.push({ id: d.record_id, fields: { [statusField]: "Adres Bulunamadı" } });
-      });
-    }
+    const withPurpose = distances.map((d) => ({ ...d, purposeText: purposes[d.record_id] }));
+    const records = buildSyncRecords(
+      withPurpose,
+      {
+        distance: distField,
+        cost: costCol ? fieldName(costCol) : null,
+        status: statusCol ? fieldName(statusCol) : null,
+        purpose: purposeCol ? fieldName(purposeCol) : null,
+      },
+      ratePerUnit,
+      rateUnit,
+    );
 
     setSyncProgress({ synced: 0, total: records.length });
 
@@ -331,6 +404,8 @@ const NewJobPage = () => {
                     { label: "Distance Output", value: distanceCol, onChange: setDistanceCol, optional: false },
                     { label: "Reimbursement Amount", value: costCol, onChange: setCostCol, optional: true },
                     { label: "Status / Log", value: statusCol, onChange: setStatusCol, optional: true },
+                    { label: "Trip Notes / Reason", value: notesCol, onChange: setNotesCol, optional: true },
+                    { label: "Business Purpose", value: purposeCol, onChange: setPurposeCol, optional: true },
                   ].map(({ label, value, onChange, optional }) => (
                     <div key={label} className="space-y-2">
                       <Label>{label}{optional && <span className="text-muted-foreground"> (optional)</span>}</Label>
@@ -431,23 +506,32 @@ const NewJobPage = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-10"><span className="sr-only">AI purpose</span></TableHead>
                         <TableHead>Record ID</TableHead>
                         <TableHead>Start</TableHead>
                         <TableHead>End</TableHead>
                         {distances.length > 0 && <TableHead>Distance</TableHead>}
                         {distances.length > 0 && costCol && <TableHead>Amount</TableHead>}
+                        {showPurposeColumn && <TableHead>Business Purpose</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {preview.map((r) => {
-                        const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
-                        const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
+                        const addr = addressesOf(r);
                         const dist = distances.find((d) => d.record_id === r.id);
                         return (
                           <TableRow key={r.id}>
+                            <TableCell className="align-top">
+                              <PurposeCell
+                                purpose={undefined}
+                                initialNote={noteOf(r)}
+                                onChange={(p) => setPurpose(r.id, p)}
+                                onError={showAiError}
+                              />
+                            </TableCell>
                             <TableCell className="font-mono text-xs">{r.id.slice(0, 10)}</TableCell>
-                            <TableCell>{String(r.fields[startField] ?? "")}</TableCell>
-                            <TableCell>{String(r.fields[endField] ?? "")}</TableCell>
+                            <TableCell>{addr.start}</TableCell>
+                            <TableCell>{addr.end}</TableCell>
                             {distances.length > 0 && (
                               <TableCell>
                                 {dist?.status === "ok" ? `${dist.distance_mi.toFixed(2)} mi` : dist?.error ?? "—"}
@@ -458,6 +542,11 @@ const NewJobPage = () => {
                                 {dist?.status === "ok"
                                   ? `$${calculateReimbursement(dist.distance_mi, ratePerUnit, rateUnit).toFixed(2)}`
                                   : "—"}
+                              </TableCell>
+                            )}
+                            {showPurposeColumn && (
+                              <TableCell className="text-xs">
+                                {purposes[r.id] ?? (generatingPurposes ? "Drafting…" : <span className="text-muted-foreground">—</span>)}
                               </TableCell>
                             )}
                           </TableRow>
@@ -491,20 +580,28 @@ const NewJobPage = () => {
                     <TableHead>Record ID</TableHead>
                     <TableHead>Adres</TableHead>
                     <TableHead>Sebep</TableHead>
+                    <TableHead className="text-right">AI</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {distances.filter((d) => d.status !== "ok").map((d) => {
                     const row = preview.find((p) => p.id === d.record_id);
-                    const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
-                    const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
+                    const addr = row ? addressesOf(row) : { start: "", end: "" };
                     return (
                       <TableRow key={d.record_id}>
                         <TableCell className="font-mono text-xs">{d.record_id.slice(0, 10)}</TableCell>
                         <TableCell className="text-xs">
-                          {String(row?.fields[startField] ?? "—")} → {String(row?.fields[endField] ?? "—")}
+                          {addr.start || "—"} → {addr.end || "—"}
                         </TableCell>
                         <TableCell className="text-xs">{d.error ?? "Adres Bulunamadı"}</TableCell>
+                        <TableCell className="text-right">
+                          <FixAddressRow
+                            start={addr.start}
+                            end={addr.end}
+                            onApply={(s, e) => recalculateRow(d.record_id, s, e)}
+                            onError={showAiError}
+                          />
+                        </TableCell>
                       </TableRow>
                     );
                   })}
