@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
 import { listBases, listTables, readRecords, syncRecords } from "@/services/airtable";
 import { calculateDistances, AddressPair, DistanceResult } from "@/services/distance";
+import { AiAssistError, generatePurposes, suggestAddressFix, type VerifiedAddress } from "@/services/aiAssist";
 import {
   getMapping,
   upsertMapping,
@@ -29,11 +30,19 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { ToastAction } from "@/components/ui/toast";
+import { Pencil, Sparkles } from "lucide-react";
 
 interface AirtableBase { id: string; name: string }
 interface AirtableTable { id: string; name: string; fields: AirtableField[] }
 interface AirtableField { id: string; name: string; type: string }
 interface PreviewRecord { id: string; fields: Record<string, unknown> }
+interface AddressFixProposal {
+  recordId: string;
+  originalStart: string;
+  originalEnd: string;
+  start: VerifiedAddress | null;
+  end: VerifiedAddress | null;
+}
 
 const NewJobPage = () => {
   const { user } = useAuth();
@@ -55,6 +64,9 @@ const NewJobPage = () => {
   const [distanceCol, setDistanceCol] = useState("");
   const [costCol, setCostCol] = useState("");
   const [statusCol, setStatusCol] = useState("");
+  const [notesCol, setNotesCol] = useState("");
+  const [purposeCol, setPurposeCol] = useState("");
+  const [mappingLoadedFor, setMappingLoadedFor] = useState<string | null>(null);
   const [showSummary, setShowSummary] = useState(false);
   const [syncedCount, setSyncedCount] = useState<number | null>(null);
   const [ratePerUnit, setRatePerUnit] = useState<number>(DEFAULT_RATE_PER_MILE);
@@ -62,6 +74,13 @@ const NewJobPage = () => {
 
   const [preview, setPreview] = useState<PreviewRecord[]>([]);
   const [distances, setDistances] = useState<DistanceResult[]>([]);
+  const [purposeTexts, setPurposeTexts] = useState<Record<string, string>>({});
+  const [purposeDrafts, setPurposeDrafts] = useState<Record<string, string>>({});
+  const [purposeEditingId, setPurposeEditingId] = useState<string | null>(null);
+  const [purposeGeneratingId, setPurposeGeneratingId] = useState<string | null>(null);
+  const [fixingRecordId, setFixingRecordId] = useState<string | null>(null);
+  const [fixProposal, setFixProposal] = useState<AddressFixProposal | null>(null);
+  const [applyingFix, setApplyingFix] = useState(false);
 
   const [loadingBases, setLoadingBases] = useState(false);
   const [loadingTables, setLoadingTables] = useState(false);
@@ -104,29 +123,55 @@ const NewJobPage = () => {
       .finally(() => setLoadingTables(false));
   }, [hasPat, selectedBase]);
 
-  // On table select: load fields + check saved mappings
+  // On table select: load fields + check saved mappings.
+  // Reset first so a previous table's mapping can never be upserted into the new table
+  // while the async saved-mapping lookup is still in flight.
   useEffect(() => {
     if (!selectedTable) return;
+    let cancelled = false;
     const table = tables.find((t) => t.id === selectedTable);
     if (table) setFields(table.fields ?? []);
 
-    if (!user) return;
-    getMapping(user.id, selectedTable).then((m) => {
-      if (m) {
+    setMappingLoadedFor(null);
+    setStartCol("");
+    setEndCol("");
+    setDistanceCol("");
+    setCostCol("");
+    setStatusCol("");
+    setNotesCol("");
+    setPurposeCol("");
+    setRatePerUnit(DEFAULT_RATE_PER_MILE);
+    setRateUnit("mi");
+
+    if (!user) return () => { cancelled = true; };
+    getMapping(user.id, selectedTable)
+      .then((m) => {
+        if (cancelled || !m) return;
         setStartCol(m.start_col_id);
         setEndCol(m.end_col_id);
         setDistanceCol(m.distance_col_id);
         setCostCol(m.cost_col_id ?? "");
         setStatusCol(m.status_col_id ?? "");
+        setNotesCol(m.notes_col_id ?? "");
+        setPurposeCol(m.purpose_col_id ?? "");
         setRatePerUnit(m.rate_per_unit);
         setRateUnit(m.rate_unit);
-      }
-    });
-  }, [selectedTable, tables, user]);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          toast({ title: "Error loading saved mapping", description: e.message, variant: "destructive" });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMappingLoadedFor(selectedTable);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedTable, tables, user, toast]);
 
   // Save mapping when cols or rate settings change
   useEffect(() => {
-    if (!user || !selectedTable || !startCol || !endCol || !distanceCol) return;
+    if (!user || !selectedTable || mappingLoadedFor !== selectedTable || !startCol || !endCol || !distanceCol) return;
     upsertMapping({
       user_id: user.id,
       table_id: selectedTable,
@@ -135,10 +180,12 @@ const NewJobPage = () => {
       distance_col_id: distanceCol,
       cost_col_id: costCol || null,
       status_col_id: statusCol || null,
+      notes_col_id: notesCol || null,
+      purpose_col_id: purposeCol || null,
       rate_per_unit: ratePerUnit,
       rate_unit: rateUnit,
     }).catch(() => {});
-  }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, ratePerUnit, rateUnit]);
+  }, [user, selectedTable, mappingLoadedFor, startCol, endCol, distanceCol, costCol, statusCol, notesCol, purposeCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
     if (!distanceCol) return;
@@ -147,6 +194,11 @@ const NewJobPage = () => {
       const data = await readRecords(selectedBase, selectedTable, distanceCol, 5);
       setPreview(data.records ?? []);
       setDistances([]);
+      setPurposeTexts({});
+      setPurposeDrafts({});
+      setPurposeEditingId(null);
+      setFixProposal(null);
+      setSyncedCount(null);
     } catch (e: unknown) {
       toast({ title: "Error", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -168,7 +220,53 @@ const NewJobPage = () => {
       }));
 
       const result = await calculateDistances(pairs);
-      const results = result.results ?? [];
+      let results = (result.results ?? []).map((d) => ({
+        ...d,
+        purposeText: purposeTexts[d.record_id],
+      }));
+
+      if (notesCol) {
+        const notesField = fields.find((f) => f.id === notesCol)?.name ?? notesCol;
+        const noteRows = results
+          .map((d) => {
+            const row = preview.find((p) => p.id === d.record_id);
+            return {
+              recordId: d.record_id,
+              note: String(row?.fields[notesField] ?? "").trim(),
+            };
+          })
+          .filter((item) => item.note.length > 0);
+
+        if (noteRows.length > 0) {
+          try {
+            const generated = await generatePurposes(noteRows.map((item) => item.note));
+            const nextPurposes: Record<string, string> = {};
+            noteRows.forEach((item, index) => {
+              const purpose = generated[index];
+              if (purpose) nextPurposes[item.recordId] = purpose;
+            });
+            if (Object.keys(nextPurposes).length > 0) {
+              setPurposeTexts((prev) => ({ ...prev, ...nextPurposes }));
+              results = results.map((d) =>
+                nextPurposes[d.record_id] ? { ...d, purposeText: nextPurposes[d.record_id] } : d
+              );
+            }
+          } catch (aiError) {
+            const err = aiError as Error;
+            toast({
+              title: "İş amacı üretilemedi",
+              description: err.message,
+              variant: "destructive",
+              action: aiError instanceof AiAssistError && aiError.status === 402 ? (
+                <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
+                  View plans
+                </ToastAction>
+              ) : undefined,
+            });
+          }
+        }
+      }
+
       setDistances(results);
       setShowSummary(true);
       toast({
@@ -196,6 +294,127 @@ const NewJobPage = () => {
     }
   };
 
+
+  const handleGeneratePurpose = async (recordId: string) => {
+    const note = (purposeDrafts[recordId] ?? "").trim();
+    if (!note) {
+      toast({ title: "Not gerekli", description: "İş amacı üretmek için kısa bir not girin.", variant: "destructive" });
+      return;
+    }
+
+    setPurposeGeneratingId(recordId);
+    try {
+      const [purpose] = await generatePurposes([note]);
+      if (!purpose) throw new Error("AI bu not için iş amacı üretemedi.");
+      setPurposeTexts((prev) => ({ ...prev, [recordId]: purpose }));
+      setDistances((prev) =>
+        prev.map((d) => (d.record_id === recordId ? { ...d, purposeText: purpose } : d))
+      );
+      setPurposeEditingId(null);
+      toast({ title: "İş amacı üretildi", description: purpose });
+    } catch (error) {
+      const err = error as Error;
+      toast({
+        title: "İş amacı üretilemedi",
+        description: err.message,
+        variant: "destructive",
+        action: error instanceof AiAssistError && error.status === 402 ? (
+          <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
+            View plans
+          </ToastAction>
+        ) : undefined,
+      });
+    } finally {
+      setPurposeGeneratingId(null);
+    }
+  };
+
+  const handleSuggestFix = async (recordId: string) => {
+    const row = preview.find((p) => p.id === recordId);
+    if (!row) return;
+    const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
+    const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
+    const originalStart = String(row.fields[startField] ?? "").trim();
+    const originalEnd = String(row.fields[endField] ?? "").trim();
+
+    setFixingRecordId(recordId);
+    setFixProposal(null);
+    try {
+      const suggestion = await suggestAddressFix(originalStart, originalEnd);
+      const start = suggestion.start[0] ?? null;
+      const end = suggestion.end[0] ?? null;
+      if (!start && !end) throw new Error("AI harita ile doğrulanmış bir alternatif bulamadı.");
+      setFixProposal({ recordId, originalStart, originalEnd, start, end });
+    } catch (error) {
+      const err = error as Error;
+      toast({
+        title: "Adres düzeltilemedi",
+        description: err.message,
+        variant: "destructive",
+        action: error instanceof AiAssistError && error.status === 402 ? (
+          <ToastAction altText="Go to pricing" onClick={() => navigate("/pricing")}>
+            View plans
+          </ToastAction>
+        ) : undefined,
+      });
+    } finally {
+      setFixingRecordId(null);
+    }
+  };
+
+  const handleApplyFix = async () => {
+    if (!fixProposal) return;
+    const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
+    const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
+    const nextStart = fixProposal.start?.address ?? fixProposal.originalStart;
+    const nextEnd = fixProposal.end?.address ?? fixProposal.originalEnd;
+
+    setApplyingFix(true);
+    setPreview((prev) =>
+      prev.map((row) =>
+        row.id === fixProposal.recordId
+          ? {
+              ...row,
+              fields: {
+                ...row.fields,
+                [startField]: nextStart,
+                [endField]: nextEnd,
+              },
+            }
+          : row
+      )
+    );
+
+    try {
+      const recalculated = await calculateDistances([
+        { record_id: fixProposal.recordId, start: nextStart, end: nextEnd },
+      ]);
+      const updated = recalculated.results?.[0];
+      if (!updated) throw new Error("Düzeltilen adres için rota sonucu alınamadı.");
+      const purposeText = purposeTexts[fixProposal.recordId];
+      const nextResult = purposeText ? { ...updated, purposeText } : updated;
+      setDistances((prev) =>
+        prev.map((d) => (d.record_id === fixProposal.recordId ? nextResult : d))
+      );
+
+      if (updated.status === "ok") {
+        setFixProposal(null);
+        toast({ title: "Adres uygulandı", description: "Satır yeniden doğrulandı ve rota hesaplandı." });
+      } else {
+        toast({
+          title: "Adres uygulandı ancak rota doğrulanamadı",
+          description: updated.error ?? "Adres Bulunamadı",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      const err = error as Error;
+      toast({ title: "Adres uygulanamadı", description: err.message, variant: "destructive" });
+    } finally {
+      setApplyingFix(false);
+    }
+  };
+
   const handleSync = async () => {
     if (!distances.length) return;
     setSyncing(true);
@@ -204,6 +423,7 @@ const NewJobPage = () => {
     const distField = fieldName(distanceCol);
     const costField = costCol ? fieldName(costCol) : null;
     const statusField = statusCol ? fieldName(statusCol) : null;
+    const purposeField = purposeCol ? fieldName(purposeCol) : null;
 
     const successResults = distances.filter((d) => d.status === "ok");
     const failedResults = distances.filter((d) => d.status !== "ok");
@@ -219,6 +439,7 @@ const NewJobPage = () => {
         );
       }
       if (statusField) values[statusField] = "Hesaplandı";
+      if (purposeField && d.purposeText) values[purposeField] = d.purposeText;
       return { id: d.record_id, fields: values };
     });
 
@@ -264,6 +485,12 @@ const NewJobPage = () => {
   const noSettings = !hasPat;
   const okCount = distances.filter((d) => d.status === "ok").length;
   const failedCount = distances.filter((d) => d.status !== "ok").length;
+  const showPurposeColumn = Boolean(purposeCol || Object.keys(purposeTexts).length > 0);
+  const previewColumnCount =
+    4 +
+    (distances.length > 0 ? 1 : 0) +
+    (distances.length > 0 && costCol ? 1 : 0) +
+    (showPurposeColumn ? 1 : 0);
 
   return (
     <div className="min-h-screen bg-background">
@@ -331,6 +558,8 @@ const NewJobPage = () => {
                     { label: "Distance Output", value: distanceCol, onChange: setDistanceCol, optional: false },
                     { label: "Reimbursement Amount", value: costCol, onChange: setCostCol, optional: true },
                     { label: "Status / Log", value: statusCol, onChange: setStatusCol, optional: true },
+                    { label: "Trip Notes / Reason (Kaynak Not Sütunu)", value: notesCol, onChange: setNotesCol, optional: true },
+                    { label: "Business Purpose (Hedef İş Amacı Sütunu)", value: purposeCol, onChange: setPurposeCol, optional: true },
                   ].map(({ label, value, onChange, optional }) => (
                     <div key={label} className="space-y-2">
                       <Label>{label}{optional && <span className="text-muted-foreground"> (optional)</span>}</Label>
@@ -431,36 +660,93 @@ const NewJobPage = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-10"><span className="sr-only">AI purpose</span></TableHead>
                         <TableHead>Record ID</TableHead>
                         <TableHead>Start</TableHead>
                         <TableHead>End</TableHead>
                         {distances.length > 0 && <TableHead>Distance</TableHead>}
                         {distances.length > 0 && costCol && <TableHead>Amount</TableHead>}
+                        {showPurposeColumn && <TableHead>Business Purpose</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {preview.map((r) => {
                         const startField = fields.find((f) => f.id === startCol)?.name ?? startCol;
                         const endField = fields.find((f) => f.id === endCol)?.name ?? endCol;
+                        const notesField = notesCol ? (fields.find((f) => f.id === notesCol)?.name ?? notesCol) : null;
                         const dist = distances.find((d) => d.record_id === r.id);
+                        const purposeText = dist?.purposeText ?? purposeTexts[r.id];
                         return (
-                          <TableRow key={r.id}>
-                            <TableCell className="font-mono text-xs">{r.id.slice(0, 10)}</TableCell>
-                            <TableCell>{String(r.fields[startField] ?? "")}</TableCell>
-                            <TableCell>{String(r.fields[endField] ?? "")}</TableCell>
-                            {distances.length > 0 && (
+                          <Fragment key={r.id}>
+                            <TableRow>
                               <TableCell>
-                                {dist?.status === "ok" ? `${dist.distance_mi.toFixed(2)} mi` : dist?.error ?? "—"}
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  aria-label="Generate business purpose"
+                                  title="Generate business purpose"
+                                  onClick={() => {
+                                    const sourceNote = notesField ? String(r.fields[notesField] ?? "") : "";
+                                    setPurposeDrafts((prev) => ({
+                                      ...prev,
+                                      [r.id]: prev[r.id] ?? sourceNote,
+                                    }));
+                                    setPurposeEditingId((current) => current === r.id ? null : r.id);
+                                  }}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
                               </TableCell>
+                              <TableCell className="font-mono text-xs">{r.id.slice(0, 10)}</TableCell>
+                              <TableCell>{String(r.fields[startField] ?? "")}</TableCell>
+                              <TableCell>{String(r.fields[endField] ?? "")}</TableCell>
+                              {distances.length > 0 && (
+                                <TableCell>
+                                  {dist?.status === "ok" ? `${dist.distance_mi.toFixed(2)} mi` : dist?.error ?? "—"}
+                                </TableCell>
+                              )}
+                              {distances.length > 0 && costCol && (
+                                <TableCell>
+                                  {dist?.status === "ok"
+                                    ? `${calculateReimbursement(dist.distance_mi, ratePerUnit, rateUnit).toFixed(2)}`
+                                    : "—"}
+                                </TableCell>
+                              )}
+                              {showPurposeColumn && (
+                                <TableCell className="max-w-[240px] whitespace-normal text-sm">
+                                  {purposeText ?? "—"}
+                                </TableCell>
+                              )}
+                            </TableRow>
+                            {purposeEditingId === r.id && (
+                              <TableRow>
+                                <TableCell colSpan={previewColumnCount}>
+                                  <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3 sm:flex-row">
+                                    <Input
+                                      value={purposeDrafts[r.id] ?? ""}
+                                      onChange={(e) =>
+                                        setPurposeDrafts((prev) => ({ ...prev, [r.id]: e.target.value }))
+                                      }
+                                      placeholder="Kısa seyahat notu: müşteri toplantısı, saha ziyareti…"
+                                      maxLength={300}
+                                      disabled={purposeGeneratingId === r.id}
+                                    />
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      onClick={() => void handleGeneratePurpose(r.id)}
+                                      disabled={purposeGeneratingId === r.id || !(purposeDrafts[r.id] ?? "").trim()}
+                                    >
+                                      <Sparkles className="mr-2 h-4 w-4" />
+                                      {purposeGeneratingId === r.id ? "Üretiliyor..." : "Üret"}
+                                    </Button>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
                             )}
-                            {distances.length > 0 && costCol && (
-                              <TableCell>
-                                {dist?.status === "ok"
-                                  ? `$${calculateReimbursement(dist.distance_mi, ratePerUnit, rateUnit).toFixed(2)}`
-                                  : "—"}
-                              </TableCell>
-                            )}
-                          </TableRow>
+                          </Fragment>
                         );
                       })}
                     </TableBody>
@@ -474,7 +760,7 @@ const NewJobPage = () => {
 
       {/* Calculation summary */}
       <Dialog open={showSummary && distances.length > 0} onOpenChange={setShowSummary}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Hesaplama özeti</DialogTitle>
             <DialogDescription>
@@ -491,6 +777,7 @@ const NewJobPage = () => {
                     <TableHead>Record ID</TableHead>
                     <TableHead>Adres</TableHead>
                     <TableHead>Sebep</TableHead>
+                    <TableHead className="text-right">İşlem</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -505,6 +792,18 @@ const NewJobPage = () => {
                           {String(row?.fields[startField] ?? "—")} → {String(row?.fields[endField] ?? "—")}
                         </TableCell>
                         <TableCell className="text-xs">{d.error ?? "Adres Bulunamadı"}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void handleSuggestFix(d.record_id)}
+                            disabled={fixingRecordId === d.record_id || applyingFix}
+                          >
+                            <Sparkles className="mr-2 h-4 w-4" />
+                            {fixingRecordId === d.record_id ? "Fixing..." : "Fix with AI"}
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -513,6 +812,35 @@ const NewJobPage = () => {
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">Tüm satırlar başarıyla hesaplandı.</p>
+          )}
+
+          {fixProposal && (
+            <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+              <div>
+                <p className="text-sm font-medium">Harita ile doğrulanmış AI önerisi</p>
+                <p className="text-xs text-muted-foreground">
+                  Uygula seçeneği adresleri önizlemede günceller ve yalnızca bu satırın rotasını yeniden doğrular.
+                </p>
+              </div>
+              <div className="grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">Başlangıç</p>
+                  <p>{fixProposal.start?.address ?? fixProposal.originalStart}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">Bitiş</p>
+                  <p>{fixProposal.end?.address ?? fixProposal.originalEnd}</p>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setFixProposal(null)} disabled={applyingFix}>
+                  Vazgeç
+                </Button>
+                <Button type="button" size="sm" onClick={() => void handleApplyFix()} disabled={applyingFix}>
+                  {applyingFix ? "Uygulanıyor..." : "Uygula"}
+                </Button>
+              </div>
+            </div>
           )}
 
           <p className="text-xs text-muted-foreground">
@@ -530,6 +858,10 @@ const NewJobPage = () => {
                 setPreview([]);
                 setSyncedCount(null);
                 setSyncProgress({ synced: 0, total: 0 });
+                setPurposeTexts({});
+                setPurposeDrafts({});
+                setPurposeEditingId(null);
+                setFixProposal(null);
               }}
             >
               Tabloyu temizle
