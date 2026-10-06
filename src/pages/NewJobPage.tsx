@@ -337,6 +337,7 @@ const NewJobPage = () => {
   const noSettings = !hasPat;
   const okCount = distances.filter((d) => d.status === "ok").length;
   const failedCount = distances.filter((d) => d.status !== "ok").length;
+  const showPurposeColumn = Boolean(purposeCol || notesCol || Object.keys(purposes).length > 0);
 
   return (
     <div className="min-h-screen bg-background">
@@ -625,6 +626,8 @@ const NewJobPage = () => {
                 setShowSummary(false);
                 setDistances([]);
                 setPreview([]);
+                setPurposes({});
+                setOverrides({});
                 setSyncedCount(null);
                 setSyncProgress({ synced: 0, total: 0 });
               }}
