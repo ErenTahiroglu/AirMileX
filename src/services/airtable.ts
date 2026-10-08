@@ -31,16 +31,21 @@ export const readRecords = (
 ) =>
   callProxy("read-records", { baseId, tableId, distanceFieldId, limit });
 
+/**
+ * Semantic sync record. The server maps these keys to the caller's saved
+ * column mapping for the table; arbitrary field names are never accepted.
+ */
 export interface SyncRecord {
   id: string;
-  /** Field name -> value map; allows writing distance and cost in one request. */
-  fields: Record<string, string | number>;
+  distance?: string;
+  cost?: number;
+  status?: string;
+  purpose?: string;
 }
 
 export interface SyncPayload {
   baseId: string;
   tableId: string;
-  distanceFieldId: string;
   records: SyncRecord[];
 }
 
