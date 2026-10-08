@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import {
+  SyncAuthorizationError,
+  buildPatchRecords,
+  resolveAllowedFields,
+  type StoredMapping,
+} from "../_shared/airtable-sync.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,20 +33,13 @@ async function airtableFetch(url: string, pat: string, options: RequestInit = {}
   return res.json();
 }
 
-interface SyncRecord {
-  id: string;
-  /** Legacy single-field payload (distance only). */
-  value?: string;
-  /** Field name -> value map, used when multiple columns are written at once. */
-  fields?: Record<string, string | number>;
-}
+type PatchRecord = { id: string; fields: Record<string, string | number> };
 
 async function syncWithBatching(
   pat: string,
   baseId: string,
   tableId: string,
-  distanceFieldId: string,
-  records: SyncRecord[]
+  records: PatchRecord[]
 ) {
   const BATCH_SIZE = 10;
   const DELAY_MS = 250;
@@ -53,10 +52,7 @@ async function syncWithBatching(
   for (let i = 0; i < records.length; i += BATCH_SIZE) {
     const batch = records.slice(i, i + BATCH_SIZE);
     const payload = {
-      records: batch.map((r) => ({
-        id: r.id,
-        fields: r.fields ?? { [distanceFieldId]: r.value },
-      })),
+      records: batch,
       typecast: true,
     };
 
@@ -172,12 +168,34 @@ serve(async (req) => {
       }
 
       case "sync-records": {
-        if (!baseId || !tableId || !distanceFieldId || !records?.length) {
+        if (typeof baseId !== "string" || typeof tableId !== "string" || !Array.isArray(records) || !records.length) {
           throw new Error("Missing sync params");
         }
+        if (records.length > 1000) throw new Error("Too many records");
+
+        // Allowlist comes from the caller's own saved mapping, never from the request.
+        const { data: mapping } = await getServiceClient()
+          .from("saved_mappings")
+          .select("table_id, distance_col_id, cost_col_id, status_col_id, purpose_col_id")
+          .eq("user_id", userId)
+          .eq("table_id", tableId)
+          .maybeSingle();
+
+        // Verify mapped field IDs exist in the live schema of the requested table.
+        const meta = await airtableFetch(`${AIRTABLE_META}/bases/${encodeURIComponent(baseId)}/tables`, pat) as {
+          tables?: Array<{ id: string; fields: Array<{ id: string }> }>;
+        };
+        const table = meta.tables?.find((t) => t.id === tableId);
+        if (!table) throw new SyncAuthorizationError("Table not found in this base.");
+        const allowed = resolveAllowedFields(
+          mapping as StoredMapping | null,
+          tableId,
+          new Set(table.fields.map((f) => f.id)),
+        );
+        const patch = buildPatchRecords(records, allowed);
 
         // Credits are charged by distance-proxy at calculation time; sync is write-only.
-        result = await syncWithBatching(pat, baseId, tableId, distanceFieldId, records);
+        result = await syncWithBatching(pat, baseId, tableId, patch);
         break;
       }
 
@@ -190,7 +208,7 @@ serve(async (req) => {
     });
   } catch (err) {
     const message = (err as Error).message;
-    const status = message === "Unauthorized" ? 401 : 400;
+    const status = message === "Unauthorized" ? 401 : err instanceof SyncAuthorizationError ? 403 : 400;
     return new Response(JSON.stringify({ error: message }), {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
