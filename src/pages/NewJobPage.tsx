@@ -288,16 +288,10 @@ const NewJobPage = () => {
     if (!distances.length) return;
     setSyncing(true);
 
-    const distField = fieldName(distanceCol);
     const withPurpose = distances.map((d) => ({ ...d, purposeText: purposes[d.record_id] }));
     const records = buildSyncRecords(
       withPurpose,
-      {
-        distance: distField,
-        cost: costCol ? fieldName(costCol) : null,
-        status: statusCol ? fieldName(statusCol) : null,
-        purpose: purposeCol ? fieldName(purposeCol) : null,
-      },
+      { cost: Boolean(costCol), status: Boolean(statusCol), purpose: Boolean(purposeCol) },
       ratePerUnit,
       rateUnit,
     );
@@ -308,7 +302,6 @@ const NewJobPage = () => {
       const result = await syncRecords({
         baseId: selectedBase,
         tableId: selectedTable,
-        distanceFieldId: distField,
         records,
       });
 

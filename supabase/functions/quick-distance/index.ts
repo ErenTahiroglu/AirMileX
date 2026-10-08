@@ -3,11 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { buildCorsHeaders, isTrustedRequest } from "../_shared/cors.ts";
 import {
   ProviderError,
-  geoapifyGeocode,
-  geoapifyRoute,
   nominatimGeocode,
-  orsGeocode,
-  orsRoute,
   osrmRoute,
   parseCoordinates,
   runChain,
@@ -15,18 +11,14 @@ import {
   type RouteSummary,
 } from "../_shared/geo.ts";
 
-const GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
-const ORS_KEY = Deno.env.get("OPENROUTESERVICE_API_KEY") ?? "";
+// Public endpoint: free hard-coded providers only (see _shared/quick-distance-providers.ts).
 
 /** Abuse controls for this intentionally public endpoint. */
 const IP_LIMIT_PER_MINUTE = 5;
 const IP_LIMIT_PER_HOUR = 20;
 const GLOBAL_LIMIT_PER_DAY = 2000;
-/** Daily ceiling on calls that hit the operator's paid providers. */
-const PAID_LIMIT_PER_DAY = 300;
 
 type Db = ReturnType<typeof createClient>;
-type PaidGate = () => Promise<boolean>;
 
 const normalizeKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
@@ -56,8 +48,8 @@ async function hashIp(ip: string): Promise<string> {
     .join("");
 }
 
-/** Geoapify -> OpenRouteService -> free fallback, stopping early on bad addresses. */
-async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Promise<LonLat> {
+/** Cache -> Nominatim. Stops early on bad addresses. */
+async function resolveAddress(db: Db, address: string): Promise<LonLat> {
   const direct = parseCoordinates(address);
   if (direct) return direct;
 
@@ -69,12 +61,7 @@ async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Pro
     .maybeSingle();
   if (cached) return [cached.lon as number, cached.lat as number];
 
-  const attempts: Array<() => Promise<LonLat>> = [];
-  if ((GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
-    if (GEOAPIFY_KEY) attempts.push(() => geoapifyGeocode(GEOAPIFY_KEY, address));
-    if (ORS_KEY) attempts.push(() => orsGeocode(ORS_KEY, address));
-  }
-  attempts.push(() => nominatimGeocode(address));
+  const attempts: Array<() => Promise<LonLat>> = [() => nominatimGeocode(address)];
 
   const coords = await runChain(attempts);
 
@@ -88,8 +75,7 @@ async function resolveAddress(db: Db, address: string, allowPaid: PaidGate): Pro
 async function resolveRoute(
   db: Db,
   start: LonLat,
-  end: LonLat,
-  allowPaid: PaidGate
+  end: LonLat
 ): Promise<RouteSummary> {
   const key = [round6(start[0]), round6(start[1]), round6(end[0]), round6(end[1])].join(",");
   const { data: cached } = await db
@@ -101,12 +87,7 @@ async function resolveRoute(
     return { distance_m: cached.distance_m as number, duration_s: cached.duration_s as number };
   }
 
-  const attempts: Array<() => Promise<RouteSummary>> = [];
-  if ((GEOAPIFY_KEY || ORS_KEY) && (await allowPaid())) {
-    if (GEOAPIFY_KEY) attempts.push(() => geoapifyRoute(GEOAPIFY_KEY, start, end));
-    if (ORS_KEY) attempts.push(() => orsRoute(ORS_KEY, start, end));
-  }
-  attempts.push(() => osrmRoute(start, end));
+  const attempts: Array<() => Promise<RouteSummary>> = [() => osrmRoute(start, end)];
 
   const route = await runChain(attempts);
 
@@ -180,14 +161,12 @@ serve(async (req) => {
       );
     }
 
-    const allowPaid: PaidGate = () => consumeQuota(db, "paid-fallback", PAID_LIMIT_PER_DAY, 86400);
-
     const [startCoords, endCoords] = await Promise.all([
-      resolveAddress(db, start, allowPaid),
-      resolveAddress(db, end, allowPaid),
+      resolveAddress(db, start),
+      resolveAddress(db, end),
     ]);
 
-    const route = await resolveRoute(db, startCoords, endCoords, allowPaid);
+    const route = await resolveRoute(db, startCoords, endCoords);
 
     return json({
       distance_km: route.distance_m / 1000,
