@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { runBatched } from "@/lib/rateLimiter";
+import { aggregateSync, type BatchAttempt, type SyncResult } from "@/lib/syncOutcome";
 
 
 const callProxy = async (action: string, payload: Record<string, unknown> | object) => {
@@ -49,43 +50,35 @@ export interface SyncPayload {
   records: SyncRecord[];
 }
 
-export interface SyncResult {
-  synced: number;
-  failed: number;
-  errors: string[];
-}
+export type { SyncResult } from "@/lib/syncOutcome";
 
 /** Airtable allows 5 records per write; batches are spaced out to avoid 429s. */
 const AIRTABLE_BATCH_SIZE = 5;
 const AIRTABLE_BATCH_DELAY_MS = 250;
 
 /**
- * Writes records back to Airtable in rate-limited batches of 5,
- * pausing 250ms between batches. Does not touch credits.
+ * Writes records back to Airtable in rate-limited batches of 5, pausing 250ms
+ * between batches. A failed batch does not stop later ones. Never touches credits.
  */
 export const syncRecords = async (
   payload: SyncPayload,
-  onProgress?: (synced: number, total: number) => void
+  onProgress?: (processed: number, total: number) => void
 ): Promise<SyncResult> => {
   const { records, ...target } = payload;
 
-  const batchResults = (await runBatched(
+  const attempts = await runBatched<SyncRecord, BatchAttempt>(
     records,
-    (batch) => callProxy("sync-records", { ...target, records: batch }),
-    {
-      batchSize: AIRTABLE_BATCH_SIZE,
-      delayMs: AIRTABLE_BATCH_DELAY_MS,
-      onProgress,
-    }
-  )) as Array<Partial<SyncResult> | undefined>;
-
-  return batchResults.reduce<SyncResult>(
-    (acc, r) => ({
-      synced: acc.synced + (r?.synced ?? 0),
-      failed: acc.failed + (r?.failed ?? 0),
-      errors: [...acc.errors, ...(r?.errors ?? [])],
-    }),
-    { synced: 0, failed: 0, errors: [] }
+    async (batch) => {
+      const ids = batch.map((r) => r.id);
+      try {
+        const result = (await callProxy("sync-records", { ...target, records: batch })) as Partial<SyncResult>;
+        return { ids, result };
+      } catch (e) {
+        return { ids, error: (e as Error).message };
+      }
+    },
+    { batchSize: AIRTABLE_BATCH_SIZE, delayMs: AIRTABLE_BATCH_DELAY_MS, onProgress }
   );
-};
 
+  return aggregateSync(attempts);
+};

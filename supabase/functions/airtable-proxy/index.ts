@@ -23,7 +23,6 @@ const corsHeaders = {
 const AIRTABLE_API = "https://api.airtable.com/v0";
 const AIRTABLE_META = "https://api.airtable.com/v0/meta";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function airtableFetch(url: string, pat: string, options: RequestInit = {}) {
   const res = await fetch(url, {
