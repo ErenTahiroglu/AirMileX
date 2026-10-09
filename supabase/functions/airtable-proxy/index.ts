@@ -6,6 +6,14 @@ import {
   resolveAllowedFields,
   type StoredMapping,
 } from "../_shared/airtable-sync.ts";
+import {
+  AirtableInputError,
+  PatchError,
+  buildBlankFieldFormula,
+  clampPreviewLimit,
+  syncWithBatching,
+  type PatchRecord,
+} from "../_shared/airtable-records.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -15,7 +23,6 @@ const corsHeaders = {
 const AIRTABLE_API = "https://api.airtable.com/v0";
 const AIRTABLE_META = "https://api.airtable.com/v0/meta";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function airtableFetch(url: string, pat: string, options: RequestInit = {}) {
   const res = await fetch(url, {
@@ -28,65 +35,9 @@ async function airtableFetch(url: string, pat: string, options: RequestInit = {}
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Airtable ${res.status}: ${body}`);
+    throw new PatchError(`Airtable ${res.status}: ${body}`, res.status);
   }
   return res.json();
-}
-
-type PatchRecord = { id: string; fields: Record<string, string | number> };
-
-async function syncWithBatching(
-  pat: string,
-  baseId: string,
-  tableId: string,
-  records: PatchRecord[]
-) {
-  const BATCH_SIZE = 10;
-  const DELAY_MS = 250;
-  const MAX_RETRIES = 3;
-
-  let synced = 0;
-  let failed = 0;
-  const errors: string[] = [];
-
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const payload = {
-      records: batch,
-      typecast: true,
-    };
-
-    let attempt = 0;
-    let success = false;
-
-    while (attempt < MAX_RETRIES && !success) {
-      try {
-        await airtableFetch(`${AIRTABLE_API}/${baseId}/${tableId}`, pat, {
-          method: "PATCH",
-          body: JSON.stringify(payload),
-        });
-        synced += batch.length;
-        success = true;
-      } catch (err) {
-        const msg = (err as Error).message;
-        if (msg.includes("429") && attempt < MAX_RETRIES - 1) {
-          const backoff = Math.pow(2, attempt) * 1000;
-          await sleep(backoff);
-          attempt++;
-        } else {
-          failed += batch.length;
-          errors.push(`Batch at index ${i}: ${msg}`);
-          break;
-        }
-      }
-    }
-
-    if (i + BATCH_SIZE < records.length) {
-      await sleep(DELAY_MS);
-    }
-  }
-
-  return { synced, failed, errors };
 }
 
 function getServiceClient() {
@@ -160,9 +111,17 @@ serve(async (req) => {
         break;
 
       case "read-records": {
-        if (!baseId || !tableId || !distanceFieldId) throw new Error("Missing params");
-        const formula = `IF({${distanceFieldId}}=BLANK(),TRUE(),FALSE())`;
-        const url = `${AIRTABLE_API}/${baseId}/${tableId}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=${limit || 5}`;
+        if (typeof baseId !== "string" || typeof tableId !== "string" || !baseId || !tableId) {
+          throw new AirtableInputError("Missing params");
+        }
+        // Resolve the field ID against live metadata; formulas reference field names.
+        const meta = await airtableFetch(`${AIRTABLE_META}/bases/${encodeURIComponent(baseId)}/tables`, pat) as {
+          tables?: Array<{ id: string; fields: Array<{ id: string; name: string }> }>;
+        };
+        const table = meta.tables?.find((t) => t.id === tableId);
+        if (!table) throw new AirtableInputError("Table not found in this base.");
+        const formula = buildBlankFieldFormula(distanceFieldId, table.fields);
+        const url = `${AIRTABLE_API}/${encodeURIComponent(baseId)}/${encodeURIComponent(tableId)}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=${clampPreviewLimit(limit)}`;
         result = await airtableFetch(url, pat);
         break;
       }
@@ -195,7 +154,25 @@ serve(async (req) => {
         const patch = buildPatchRecords(records, allowed);
 
         // Credits are charged by distance-proxy at calculation time; sync is write-only.
-        result = await syncWithBatching(pat, baseId, tableId, patch);
+        const dropped = records.length - patch.length;
+        const sync = await syncWithBatching(patch, async (batch: PatchRecord[]) => {
+          const res = await airtableFetch(`${AIRTABLE_API}/${encodeURIComponent(baseId)}/${encodeURIComponent(tableId)}`, pat, {
+            method: "PATCH",
+            body: JSON.stringify({ records: batch, typecast: true }),
+          }) as { records?: Array<{ id: string }> };
+          return (res.records ?? []).map((r) => r.id);
+        });
+        // Records rejected by the allowlist are reported as failed, never silently dropped.
+        const accepted = new Set(patch.map((p) => p.id));
+        const rejectedIds = (records as Array<{ id?: unknown }>)
+          .map((r) => (typeof r?.id === "string" ? r.id : ""))
+          .filter((id) => id && !accepted.has(id));
+        result = {
+          ...sync,
+          failed: sync.failed + dropped,
+          failedIds: [...sync.failedIds, ...rejectedIds],
+          errors: dropped ? [...sync.errors, `${dropped} record(s) had no writable values.`] : sync.errors,
+        };
         break;
       }
 
@@ -208,7 +185,7 @@ serve(async (req) => {
     });
   } catch (err) {
     const message = (err as Error).message;
-    const status = message === "Unauthorized" ? 401 : err instanceof SyncAuthorizationError ? 403 : 400;
+    const status = message === "Unauthorized" ? 401 : err instanceof SyncAuthorizationError ? 403 : err instanceof PatchError ? 502 : 400;
     return new Response(JSON.stringify({ error: message }), {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
