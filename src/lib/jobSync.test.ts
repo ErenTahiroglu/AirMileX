@@ -1,6 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { buildSyncRecords } from "./jobSync";
 import type { DistanceResult } from "@/services/distance";
+
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    from: vi.fn(),
+    auth: { getSession: vi.fn() },
+  },
+}));
 
 const ok: DistanceResult = { record_id: "rec1", distance_km: 16.09, distance_mi: 10, status: "ok", purposeText: "Client meeting" };
 const bad: DistanceResult = { record_id: "rec2", distance_km: 0, distance_mi: 0, status: "error", purposeText: "x" };
