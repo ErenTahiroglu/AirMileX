@@ -28,4 +28,13 @@ describe("sync outcome", () => {
     const r = aggregateSync([{ ids: ["a"], error: "x" }]);
     expect(syncOutcomeKind(r)).toBe("failure");
   });
+
+  it("indeterminate network outcome marks IDs as indeterminate", () => {
+    const r = aggregateSync([{ ids: ["a", "b"], error: "timeout", indeterminate: true }]);
+    expect(r.synced).toBe(0);
+    expect(r.failed).toBe(0);
+    expect(r.indeterminate).toBe(2);
+    expect(r.indeterminateIds).toEqual(["a", "b"]);
+    expect(syncOutcomeKind(r)).toBe("indeterminate");
+  });
 });

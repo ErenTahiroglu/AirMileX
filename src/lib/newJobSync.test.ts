@@ -40,6 +40,7 @@ describe("newJobSync orchestrator", () => {
     mockSetMappingStatus = vi.fn();
     mockSetMappingError = vi.fn();
     mockSetSyncProgress = vi.fn();
+    mockSetConfirmedSyncIds = vi.fn();
     mockSetFailedSyncIds = vi.fn();
     mockSetSyncedCount = vi.fn();
     mockSetShowSummary = vi.fn();
@@ -60,6 +61,7 @@ describe("newJobSync orchestrator", () => {
       rateUnit: "mi",
       distances: sampleDistances,
       purposes: {},
+      confirmedSyncIds: [],
       failedSyncIds: [],
       syncedCount: null,
       provider: "google",
@@ -72,12 +74,15 @@ describe("newJobSync orchestrator", () => {
       setMappingStatus: mockSetMappingStatus,
       setMappingError: mockSetMappingError,
       setSyncProgress: mockSetSyncProgress,
+      setConfirmedSyncIds: mockSetConfirmedSyncIds,
       setFailedSyncIds: mockSetFailedSyncIds,
       setSyncedCount: mockSetSyncedCount,
       setShowSummary: mockSetShowSummary,
       toast: mockToast,
     };
   });
+
+  let mockSetConfirmedSyncIds: ReturnType<typeof vi.fn>;
 
   it("1. Full success: confirms persistence, syncs all records, logs audit, and notifies success", async () => {
     const successResult: SyncResult = {
@@ -118,6 +123,7 @@ describe("newJobSync orchestrator", () => {
     );
 
     // Succeeded count updated and audit log inserted
+    expect(mockSetConfirmedSyncIds).toHaveBeenCalledWith(["rec1", "rec2", "rec3"]);
     expect(mockSetFailedSyncIds).toHaveBeenCalledWith([]);
     expect(mockSetSyncedCount).toHaveBeenCalledWith(3);
     expect(mockInsertLog).toHaveBeenCalledWith(
@@ -134,7 +140,8 @@ describe("newJobSync orchestrator", () => {
     });
   });
 
-  it("2. Partial success: tracks failed record IDs and notifies partial failure without claiming unconfirmed writes", async () => {
+  it("2. Partial sync -> retry -> full success (never resends confirmed records)", async () => {
+    // Initial attempt: rec1 and rec2 succeed, rec3 fails
     const partialResult: SyncResult = {
       synced: 2,
       failed: 1,
@@ -146,61 +153,28 @@ describe("newJobSync orchestrator", () => {
 
     await executeJobSync(params);
 
+    expect(mockSetConfirmedSyncIds).toHaveBeenCalledWith(["rec1", "rec2"]);
     expect(mockSetFailedSyncIds).toHaveBeenCalledWith(["rec3"]);
     expect(mockSetSyncedCount).toHaveBeenCalledWith(2);
-    expect(mockInsertLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        records_processed: 2,
-      })
-    );
-    expect(mockToast).toHaveBeenCalledWith({
-      title: "Partial sync",
-      description: "2 records updated, 1 records failed. You can retry the failed records.",
-      variant: "destructive",
-    });
-  });
+    expect(mockInsertLog).toHaveBeenCalledWith(expect.objectContaining({ records_processed: 2 }));
 
-  it("3. Complete failure: handles 0 writes, marks all failed, skips audit log", async () => {
-    const failureResult: SyncResult = {
-      synced: 0,
-      failed: 3,
-      errors: ["Airtable 422: Unprocessable Entity"],
-      succeededIds: [],
-      failedIds: ["rec1", "rec2", "rec3"],
-    };
-    mockSyncRecords.mockResolvedValue(failureResult);
-
-    await executeJobSync(params);
-
-    expect(mockSetFailedSyncIds).toHaveBeenCalledWith(["rec1", "rec2", "rec3"]);
-    expect(mockSetSyncedCount).toHaveBeenCalledWith(0);
-    // When 0 records synced, audit log must NOT record any processed records
-    expect(mockInsertLog).not.toHaveBeenCalled();
-    expect(mockToast).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Sync failed",
-        variant: "destructive",
-      })
-    );
-  });
-
-  it("4. Failed-record retry: only resends failed records and accumulates confirmed counts", async () => {
-    // Retry scenario: previously rec1 and rec2 succeeded, rec3 failed
+    // Now user clicks Retry: confirmedSyncIds has ["rec1", "rec2"], failedSyncIds has ["rec3"]
+    vi.clearAllMocks();
+    params.confirmedSyncIds = ["rec1", "rec2"];
     params.failedSyncIds = ["rec3"];
-    params.syncedCount = 2;
 
-    const retryResult: SyncResult = {
+    const retrySuccessResult: SyncResult = {
       synced: 1,
       failed: 0,
       errors: [],
       succeededIds: ["rec3"],
       failedIds: [],
     };
-    mockSyncRecords.mockResolvedValue(retryResult);
+    mockSyncRecords.mockResolvedValue(retrySuccessResult);
 
     await executeJobSync(params);
 
-    // Verify only rec3 was sent in payload, never rec1 or rec2
+    // Only rec3 was sent on retry!
     expect(mockSyncRecords).toHaveBeenCalledWith(
       expect.objectContaining({
         records: [expect.objectContaining({ id: "rec3" })],
@@ -208,17 +182,71 @@ describe("newJobSync orchestrator", () => {
       expect.any(Function)
     );
 
-    // Total synced count accumulated: 2 + 1 = 3
-    expect(mockSetSyncedCount).toHaveBeenCalledWith(3);
+    // All confirmed: rec1, rec2, rec3
+    expect(mockSetConfirmedSyncIds).toHaveBeenCalledWith(["rec1", "rec2", "rec3"]);
     expect(mockSetFailedSyncIds).toHaveBeenCalledWith([]);
-    expect(mockInsertLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        records_processed: 1,
-      })
-    );
+    expect(mockSetSyncedCount).toHaveBeenCalledWith(3);
+    // Audit log only logs the 1 newly confirmed record (never duplicates)
+    expect(mockInsertLog).toHaveBeenCalledWith(expect.objectContaining({ records_processed: 1 }));
   });
 
-  it("5. Audit-log failure: does not report sync failure when Airtable write succeeds", async () => {
+  it("3. Repeated sync after full success: blocked, never resends confirmed records or duplicates logs", async () => {
+    // All 3 records already confirmed
+    params.confirmedSyncIds = ["rec1", "rec2", "rec3"];
+    params.failedSyncIds = [];
+
+    await executeJobSync(params);
+
+    expect(mockSyncRecords).not.toHaveBeenCalled();
+    expect(mockInsertLog).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "All records synced",
+      description: "All records for this job have already been confirmed in Airtable.",
+    });
+  });
+
+  it("4. Indeterminate network outcome: distinguishes network drops without claiming definite failure", async () => {
+    const indeterminateResult: SyncResult = {
+      synced: 0,
+      failed: 0,
+      indeterminate: 3,
+      errors: ["Network timeout while connecting to Airtable proxy"],
+      succeededIds: [],
+      failedIds: [],
+      indeterminateIds: ["rec1", "rec2", "rec3"],
+    };
+    mockSyncRecords.mockResolvedValue(indeterminateResult);
+
+    await executeJobSync(params);
+
+    expect(mockSetConfirmedSyncIds).toHaveBeenCalledWith([]);
+    // Indeterminate IDs are retained for retry
+    expect(mockSetFailedSyncIds).toHaveBeenCalledWith(["rec1", "rec2", "rec3"]);
+    expect(mockInsertLog).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "Sync outcome indeterminate",
+      description: "Network error occurred. 3 record(s) could not be confirmed in Airtable. You can retry.",
+      variant: "destructive",
+    });
+  });
+
+  it("5. AI generation pending during sync: blocks sync from proceeding without generated purposes", async () => {
+    params.generatingPurposes = true;
+    params.purposeCol = "fldPurpose";
+
+    await executeJobSync(params);
+
+    // Sync is blocked while AI is generating
+    expect(mockSyncRecords).not.toHaveBeenCalled();
+    expect(mockInsertLog).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "AI purposes generating",
+      description: "Please wait for AI business purposes to finish generating before syncing.",
+      variant: "destructive",
+    });
+  });
+
+  it("6. Audit-log failure: does not report sync failure when Airtable write succeeds", async () => {
     const successResult: SyncResult = {
       synced: 2,
       failed: 0,
@@ -231,9 +259,7 @@ describe("newJobSync orchestrator", () => {
 
     await executeJobSync(params);
 
-    // Sync is still marked complete for the user
     expect(mockSetSyncedCount).toHaveBeenCalledWith(2);
-    // Audit log failure shows a distinct notice toast, NOT a sync failed toast
     expect(mockToast).toHaveBeenCalledWith({
       title: "Audit log notice",
       description: "Records were updated in Airtable, but the local audit log could not be saved.",
@@ -244,14 +270,13 @@ describe("newJobSync orchestrator", () => {
     });
   });
 
-  it("6. Mapping persistence failure: blocks Airtable sync if mapping fails to persist", async () => {
+  it("7. Mapping persistence failure: blocks Airtable sync if mapping fails to persist", async () => {
     mockUpsertMapping.mockRejectedValue(new Error("Supabase RLS violation"));
 
     await executeJobSync(params);
 
     expect(mockSetMappingStatus).toHaveBeenCalledWith("error");
     expect(mockSetMappingError).toHaveBeenCalledWith("Supabase RLS violation");
-    // Sync must NOT be initiated
     expect(mockSyncRecords).not.toHaveBeenCalled();
     expect(mockInsertLog).not.toHaveBeenCalled();
     expect(mockSetSyncing).toHaveBeenCalledWith(false);

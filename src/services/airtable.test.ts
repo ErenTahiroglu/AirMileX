@@ -53,9 +53,11 @@ describe("airtable synchronization service", () => {
     expect(res).toEqual({
       synced: 0,
       failed: 0,
+      indeterminate: 0,
       errors: [],
       succeededIds: [],
       failedIds: [],
+      indeterminateIds: [],
     });
     expect(supabase.functions.invoke).not.toHaveBeenCalled();
   });
@@ -129,7 +131,7 @@ describe("airtable synchronization service", () => {
     (supabase.functions.invoke as any).mockImplementation(async () => {
       return {
         data: null,
-        error: { message: "Network timeout or invalid credentials" } as any,
+        error: { message: "Airtable 422: Unprocessable Entity" } as any,
       };
     });
 
@@ -196,5 +198,76 @@ describe("airtable synchronization service", () => {
     expect(retryResult.synced).toBe(5);
     expect(retryResult.failed).toBe(0);
     expect(retryResult.succeededIds).toEqual(failedIds);
+  });
+
+  it("reports accurate progress and distinguishes confirmed vs failed/indeterminate without claiming processed as synced", async () => {
+    const records = makeRecords(10);
+    const progressUpdates: any[] = [];
+    let callCount = 0;
+
+    // Batch 1 succeeds, Batch 2 fails
+    (supabase.functions.invoke as any).mockImplementation(async (_fn, options) => {
+      callCount++;
+      const batch = (options?.body as any).records;
+      if (callCount === 1) {
+        return {
+          data: {
+            synced: 5,
+            failed: 0,
+            errors: [],
+            succeededIds: batch.map((r: any) => r.id),
+            failedIds: [],
+          },
+          error: null,
+        };
+      }
+      return {
+        data: null,
+        error: { message: "Internal server error" },
+      };
+    });
+
+    const res = await syncRecords(
+      { baseId: "appBase", tableId: "tbl1", records },
+      (progress) => progressUpdates.push({ ...progress })
+    );
+
+    expect(res.synced).toBe(5);
+    expect(res.failed).toBe(5);
+    expect(progressUpdates).toHaveLength(2);
+
+    // Batch 1 progress
+    expect(progressUpdates[0]).toEqual({
+      processed: 5,
+      confirmed: 5,
+      failed: 0,
+      indeterminate: 0,
+      total: 10,
+    });
+
+    // Batch 2 progress: processed is 10, confirmed is still 5, failed is 5
+    expect(progressUpdates[1]).toEqual({
+      processed: 10,
+      confirmed: 5,
+      failed: 5,
+      indeterminate: 0,
+      total: 10,
+    });
+  });
+
+  it("identifies network timeouts as indeterminate outcomes rather than confirmed write failures", async () => {
+    const records = makeRecords(5);
+    (supabase.functions.invoke as any).mockImplementation(async () => {
+      return {
+        data: null,
+        error: { message: "TypeError: Failed to fetch (network connection lost)" },
+      };
+    });
+
+    const res = await syncRecords({ baseId: "appBase", tableId: "tbl1", records });
+
+    expect(res.synced).toBe(0);
+    expect(res.indeterminate).toBe(5);
+    expect(res.indeterminateIds).toEqual(records.map((r) => r.id));
   });
 });

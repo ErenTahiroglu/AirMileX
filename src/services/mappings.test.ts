@@ -200,4 +200,129 @@ describe("mappings service", () => {
       expect(result).toBeNull();
     });
   });
+
+  describe("MappingCoordinator (out-of-order & rapid changes)", () => {
+    it("guarantees latest-user-intent-wins even when saves complete in reversed order", async () => {
+      const calls: string[] = [];
+      let resolveFirst!: (val: any) => void;
+      const firstPromise = new Promise((r) => { resolveFirst = r; });
+
+      const mockUpsert = vi.fn().mockImplementation((input: MappingInput) => {
+        calls.push(input.start_col_id);
+        if (input.start_col_id === "col1") {
+          return firstPromise;
+        }
+        return Promise.resolve({
+          id: "m2",
+          ...input,
+          cost_col_id: null,
+          status_col_id: null,
+          notes_col_id: null,
+          purpose_col_id: null,
+          rate_per_unit: 0.76,
+          rate_unit: "mi",
+        });
+      });
+
+      const statuses: string[] = [];
+      const { MappingCoordinator } = await import("./mappings");
+      const coordinator = new MappingCoordinator(mockUpsert, (s) => statuses.push(s));
+      coordinator.setActiveTable("tbl1");
+
+      // Save 1 initiated (will hang on firstPromise)
+      const p1 = coordinator.scheduleSave("tbl1", {
+        user_id: "u1",
+        table_id: "tbl1",
+        start_col_id: "col1",
+        end_col_id: "endCol",
+        distance_col_id: "distCol",
+      });
+
+      // Save 2 initiated immediately after
+      const p2 = coordinator.scheduleSave("tbl1", {
+        user_id: "u1",
+        table_id: "tbl1",
+        start_col_id: "col2",
+        end_col_id: "endCol",
+        distance_col_id: "distCol",
+      });
+
+      // Now resolve Save 1
+      resolveFirst({
+        id: "m1",
+        user_id: "u1",
+        table_id: "tbl1",
+        start_col_id: "col1",
+        end_col_id: "endCol",
+        distance_col_id: "distCol",
+        cost_col_id: null,
+        status_col_id: null,
+        notes_col_id: null,
+        purpose_col_id: null,
+        rate_per_unit: 0.76,
+        rate_unit: "mi",
+      });
+
+      const [res1, res2] = await Promise.all([p1, p2]);
+
+      // Call 1 was superseded, so res1 is null; res2 is the latest saved mapping
+      expect(res1).toBeNull();
+      expect(res2?.start_col_id).toBe("col2");
+      expect(statuses[statuses.length - 1]).toBe("saved");
+    });
+
+    it("prevents stale in-flight saves from updating status after rapid table switch", async () => {
+      let resolveTable1!: (val: any) => void;
+      const table1Promise = new Promise((r) => { resolveTable1 = r; });
+
+      const mockUpsert = vi.fn().mockImplementation((input: MappingInput) => {
+        if (input.table_id === "tbl1") return table1Promise;
+        return Promise.resolve({
+          id: "m-tbl2",
+          ...input,
+          cost_col_id: null,
+          status_col_id: null,
+          notes_col_id: null,
+          purpose_col_id: null,
+          rate_per_unit: 0.76,
+          rate_unit: "mi",
+        });
+      });
+
+      const statuses: string[] = [];
+      const { MappingCoordinator } = await import("./mappings");
+      const coordinator = new MappingCoordinator(mockUpsert, (s) => statuses.push(s));
+      coordinator.setActiveTable("tbl1");
+
+      const p1 = coordinator.scheduleSave("tbl1", {
+        user_id: "u1",
+        table_id: "tbl1",
+        start_col_id: "c1",
+        end_col_id: "c2",
+        distance_col_id: "c3",
+      });
+
+      // User immediately switches to Table 2
+      coordinator.setActiveTable("tbl2");
+
+      // Table 1 resolves late
+      resolveTable1({
+        id: "m-tbl1",
+        user_id: "u1",
+        table_id: "tbl1",
+        start_col_id: "c1",
+        end_col_id: "c2",
+        distance_col_id: "c3",
+        cost_col_id: null,
+        status_col_id: null,
+        notes_col_id: null,
+        purpose_col_id: null,
+        rate_per_unit: 0.76,
+        rate_unit: "mi",
+      });
+
+      const res1 = await p1;
+      expect(res1).toBeNull(); // Discarded due to table switch
+    });
+  });
 });

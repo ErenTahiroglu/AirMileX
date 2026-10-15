@@ -105,3 +105,79 @@ export const calculateReimbursement = (
   const distance = unit === "km" ? distanceMi * 1.609344 : distanceMi;
   return distance * ratePerUnit;
 };
+
+export type MappingStatus = "idle" | "loading" | "saving" | "saved" | "error";
+
+/**
+ * Coordinates mapping persistence with latest-user-intent-wins semantics.
+ * Serializes writes, avoids stale out-of-order completions, and protects against
+ * cross-table contamination during rapid table switches.
+ */
+export class MappingCoordinator {
+  private queue: Promise<void> = Promise.resolve();
+  private latestSeq = 0;
+  private pendingPayload: { tableId: string; input: MappingInput; seq: number } | null = null;
+  private currentTableId: string | null = null;
+  private statusCallback?: (status: MappingStatus, err?: string | null) => void;
+  private upsertFn: (input: MappingInput) => Promise<SavedMapping>;
+
+  constructor(
+    upsertFn: (input: MappingInput) => Promise<SavedMapping> = upsertMapping,
+    onStatusChange?: (status: MappingStatus, err?: string | null) => void
+  ) {
+    this.upsertFn = upsertFn;
+    this.statusCallback = onStatusChange;
+  }
+
+  setActiveTable(tableId: string | null) {
+    this.currentTableId = tableId;
+    if (this.pendingPayload && this.pendingPayload.tableId !== tableId) {
+      this.pendingPayload = null;
+    }
+  }
+
+  getActiveTable(): string | null {
+    return this.currentTableId;
+  }
+
+  scheduleSave(tableId: string, input: MappingInput): Promise<SavedMapping | null> {
+    const seq = ++this.latestSeq;
+    this.pendingPayload = { tableId, input, seq };
+    this.statusCallback?.("saving", null);
+
+    return new Promise((resolve, reject) => {
+      this.queue = this.queue.then(async () => {
+        // If superseded by a newer save or table changed away
+        if (!this.pendingPayload || this.pendingPayload.seq !== seq || this.currentTableId !== tableId) {
+          resolve(null);
+          return;
+        }
+
+        const toSave = this.pendingPayload.input;
+        try {
+          const result = await this.upsertFn(toSave);
+          // Check again if superseded while network call was in flight
+          if (this.pendingPayload?.seq === seq && this.currentTableId === tableId) {
+            this.statusCallback?.("saved", null);
+            resolve(result);
+          } else {
+            resolve(null);
+          }
+        } catch (err) {
+          if (this.pendingPayload?.seq === seq && this.currentTableId === tableId) {
+            const msg = (err as Error).message || "Failed to save mapping";
+            this.statusCallback?.("error", msg);
+            reject(err);
+          } else {
+            resolve(null);
+          }
+        }
+      });
+    });
+  }
+
+  async waitForLatest(): Promise<void> {
+    await this.queue;
+  }
+}
+
