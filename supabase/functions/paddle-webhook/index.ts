@@ -1,117 +1,74 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.100.1";
-
-async function verifySignature(
-  rawBody: string,
-  signatureHeader: string,
-  secret: string
-): Promise<boolean> {
-  const parts: Record<string, string> = {};
-  for (const part of signatureHeader.split(";")) {
-    const [key, value] = part.split("=");
-    if (key && value) parts[key.trim()] = value.trim();
-  }
-
-  const ts = parts["ts"];
-  const h1 = parts["h1"];
-  if (!ts || !h1) return false;
-
-  const payload = `${ts}:${rawBody}`;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-  const computed = Array.from(new Uint8Array(signature))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-
-  return computed === h1;
-}
+import {
+  processPaddleWebhookRequest,
+  type PaddleFulfillmentRpcResponse,
+} from "../_shared/paddle.ts";
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 });
-  }
-
   try {
-    const webhookSecret = Deno.env.get("PADDLE_WEBHOOK_SECRET");
-    if (!webhookSecret) {
-      console.error("PADDLE_WEBHOOK_SECRET not configured");
-      return new Response("Server misconfigured", { status: 500 });
-    }
-
+    const method = req.method;
     const rawBody = await req.text();
-    const signatureHeader = req.headers.get("Paddle-Signature") ?? "";
+    const signatureHeader = req.headers.get("Paddle-Signature");
 
-    const valid = await verifySignature(rawBody, signatureHeader, webhookSecret);
-    if (!valid) {
-      console.error("Invalid webhook signature");
-      return new Response("Invalid signature", { status: 401 });
+    const webhookSecret = Deno.env.get("PADDLE_WEBHOOK_SECRET");
+    const priceId = Deno.env.get("PADDLE_PRICE_ID");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    if (!supabaseUrl || !serviceRoleKey) {
+      console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+      return new Response(
+        JSON.stringify({ error: "Server misconfigured: database credentials missing" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
     }
 
-    const event = JSON.parse(rawBody);
+    const supabase = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
 
-    if (event.event_type !== "transaction.completed") {
-      return new Response("OK", { status: 200 });
-    }
+    const fulfillRpc = async (params: {
+      eventId: string;
+      transactionId: string;
+      userId: string;
+      credits: number;
+    }) => {
+      const { data, error } = await supabase.rpc("fulfill_paddle_credits", {
+        p_event_id: params.eventId,
+        p_transaction_id: params.transactionId,
+        p_user_id: params.userId,
+        p_credits: params.credits,
+      });
 
-    const eventId = event.event_id;
-    const userId = event.data?.custom_data?.user_id;
+      return {
+        data: data as PaddleFulfillmentRpcResponse | null,
+        error,
+      };
+    };
 
-    if (!eventId || !userId) {
-      console.error("Missing event_id or user_id in webhook payload");
-      return new Response("Bad request", { status: 400 });
-    }
-
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    const result = await processPaddleWebhookRequest(
+      method,
+      rawBody,
+      signatureHeader,
+      {
+        paddleWebhookSecret: webhookSecret,
+        paddlePriceId: priceId,
+        fulfillRpc,
+      }
     );
 
-    // Idempotency: insert event ID, conflict = already processed
-    const { error: insertError } = await supabase
-      .from("processed_paddle_events")
-      .insert({ id: eventId });
-
-    if (insertError) {
-      if (insertError.code === "23505") {
-        console.log(`Event ${eventId} already processed, skipping`);
-        return new Response("OK", { status: 200 });
-      }
-      console.error("Error inserting event:", insertError);
-      return new Response("Internal error", { status: 500 });
-    }
-
-    // Add 500 credits using fetch + service role (atomic increment)
-    const { data: current, error: fetchErr } = await supabase
-      .from("user_settings")
-      .select("credits")
-      .eq("id", userId)
-      .single();
-
-    if (fetchErr || !current) {
-      console.error("Error fetching credits:", fetchErr);
-      return new Response("Internal error", { status: 500 });
-    }
-
-    const { error: updateErr } = await supabase
-      .from("user_settings")
-      .update({ credits: current.credits + 500 })
-      .eq("id", userId);
-
-    if (updateErr) {
-      console.error("Error updating credits:", updateErr);
-      return new Response("Internal error", { status: 500 });
-    }
-
-    console.log(`Added 500 credits to user ${userId}, new balance: ${current.credits + 500}`);
-    return new Response("OK", { status: 200 });
-  } catch (err) {
-    console.error("paddle-webhook error:", err);
-    return new Response("Internal error", { status: 500 });
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err: any) {
+    console.error("paddle-webhook uncaught error:", err);
+    return new Response(
+      JSON.stringify({ error: "Internal server error", details: err?.message ?? String(err) }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
 });
