@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import PurposeCell from "@/components/job/PurposeCell";
 import FixAddressRow from "@/components/job/FixAddressRow";
 import { generatePurposes, AiAssistError } from "@/services/aiAssist";
-import { buildSyncRecords } from "@/lib/jobSync";
+import { executeJobSync } from "@/lib/newJobSync";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
-import { listBases, listTables, readRecords, syncRecords } from "@/services/airtable";
+import { listBases, listTables, readRecords } from "@/services/airtable";
 import { calculateDistances, AddressPair, DistanceResult } from "@/services/distance";
 import {
   getMapping,
@@ -15,7 +15,6 @@ import {
   DEFAULT_RATE_PER_MILE,
   RateUnit,
 } from "@/services/mappings";
-import { insertLog } from "@/services/logs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -67,6 +66,10 @@ const NewJobPage = () => {
   const [purposeCol, setPurposeCol] = useState("");
   // Table whose saved mapping finished loading; guards against cross-table upserts.
   const hydratedTableRef = useRef<string | null>(null);
+  const activeTableIdRef = useRef<string | null>(null);
+  const [mappingStatus, setMappingStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("idle");
+  const [mappingError, setMappingError] = useState<string | null>(null);
+  const [failedSyncIds, setFailedSyncIds] = useState<string[]>([]);
 
   const [preview, setPreview] = useState<PreviewRecord[]>([]);
   const [distances, setDistances] = useState<DistanceResult[]>([]);
@@ -117,21 +120,30 @@ const NewJobPage = () => {
 
   // On table select: reset old mapping, load fields + saved mapping for the new table.
   useEffect(() => {
+    activeTableIdRef.current = selectedTable;
     hydratedTableRef.current = null; // blocks upserts until this table's mapping is loaded
     setStartCol(""); setEndCol(""); setDistanceCol(""); setCostCol(""); setStatusCol("");
     setNotesCol(""); setPurposeCol("");
     setRatePerUnit(DEFAULT_RATE_PER_MILE); setRateUnit("mi");
     setPreview([]); setDistances([]); setPurposes({}); setOverrides({});
-    if (!selectedTable) return;
+    setFailedSyncIds([]); setSyncedCount(null);
+    setMappingError(null);
+
+    if (!selectedTable) {
+      setMappingStatus("idle");
+      return;
+    }
     const table = tables.find((t) => t.id === selectedTable);
     if (table) setFields(table.fields ?? []);
 
     if (!user) return;
     const tableId = selectedTable;
     let cancelled = false;
+    setMappingStatus("loading");
+
     getMapping(user.id, tableId)
       .then((m) => {
-        if (cancelled) return;
+        if (cancelled || activeTableIdRef.current !== tableId) return;
         if (m) {
           setStartCol(m.start_col_id);
           setEndCol(m.end_col_id);
@@ -142,17 +154,36 @@ const NewJobPage = () => {
           setPurposeCol(m.purpose_col_id ?? "");
           setRatePerUnit(m.rate_per_unit);
           setRateUnit(m.rate_unit);
+          setMappingStatus("saved");
+        } else {
+          setMappingStatus("idle");
         }
         hydratedTableRef.current = tableId;
       })
-      .catch(() => { if (!cancelled) hydratedTableRef.current = tableId; });
+      .catch((err) => {
+        if (cancelled || activeTableIdRef.current !== tableId) return;
+        const msg = (err as Error).message || "Failed to load mapping";
+        setMappingStatus("error");
+        setMappingError(msg);
+        toast({
+          title: "Error loading column mapping",
+          description: msg,
+          variant: "destructive",
+        });
+      });
+
     return () => { cancelled = true; };
   }, [selectedTable, tables, user]);
 
   // Save mapping when cols or rate settings change (only after hydration for this table).
   useEffect(() => {
     if (!user || !selectedTable || !startCol || !endCol || !distanceCol) return;
-    if (hydratedTableRef.current !== selectedTable) return;
+    if (hydratedTableRef.current !== selectedTable || activeTableIdRef.current !== selectedTable) return;
+
+    let cancelled = false;
+    setMappingStatus("saving");
+    setMappingError(null);
+
     upsertMapping({
       user_id: user.id,
       table_id: selectedTable,
@@ -165,7 +196,27 @@ const NewJobPage = () => {
       purpose_col_id: purposeCol || null,
       rate_per_unit: ratePerUnit,
       rate_unit: rateUnit,
-    }).catch(() => {});
+    })
+      .then(() => {
+        if (!cancelled && activeTableIdRef.current === selectedTable) {
+          setMappingStatus("saved");
+          setMappingError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled && activeTableIdRef.current === selectedTable) {
+          const msg = (err as Error).message || "Failed to save mapping";
+          setMappingStatus("error");
+          setMappingError(msg);
+          toast({
+            title: "Error saving column mapping",
+            description: msg,
+            variant: "destructive",
+          });
+        }
+      });
+
+    return () => { cancelled = true; };
   }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, notesCol, purposeCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
@@ -285,46 +336,35 @@ const NewJobPage = () => {
   };
 
   const handleSync = async () => {
-    if (!distances.length) return;
-    setSyncing(true);
-
-    const withPurpose = distances.map((d) => ({ ...d, purposeText: purposes[d.record_id] }));
-    const records = buildSyncRecords(
-      withPurpose,
-      { cost: Boolean(costCol), status: Boolean(statusCol), purpose: Boolean(purposeCol) },
+    await executeJobSync({
+      user,
+      selectedBase,
+      selectedTable,
+      startCol,
+      endCol,
+      distanceCol,
+      costCol,
+      statusCol,
+      notesCol,
+      purposeCol,
       ratePerUnit,
       rateUnit,
-    );
-
-    setSyncProgress({ synced: 0, total: records.length });
-
-    try {
-      const result = await syncRecords({
-        baseId: selectedBase,
-        tableId: selectedTable,
-        records,
-      });
-
-      setSyncProgress({ synced: result.synced ?? records.length, total: records.length });
-
-      if (user) {
-        await insertLog({
-          user_id: user.id,
-          base_id: selectedBase,
-          table_id: selectedTable,
-          records_processed: result.synced ?? records.length,
-          provider_used: provider,
-        });
-      }
-
-      setSyncedCount(result.synced ?? records.length);
-      setShowSummary(true);
-      toast({ title: "Sync complete", description: `${result.synced ?? records.length} records updated.` });
-    } catch (e: unknown) {
-      toast({ title: "Sync failed", description: (e as Error).message, variant: "destructive" });
-    } finally {
-      setSyncing(false);
-    }
+      distances,
+      purposes,
+      failedSyncIds,
+      syncedCount,
+      provider,
+      calculating,
+      syncing,
+      setSyncing,
+      setMappingStatus,
+      setMappingError,
+      setSyncProgress,
+      setFailedSyncIds,
+      setSyncedCount,
+      setShowSummary,
+      toast,
+    });
   };
 
   const noSettings = !hasPat;
@@ -361,7 +401,7 @@ const NewJobPage = () => {
                   {loadingBases ? (
                     <p className="text-sm text-muted-foreground">Loading bases...</p>
                   ) : (
-                    <Select value={selectedBase} onValueChange={setSelectedBase}>
+                    <Select value={selectedBase} onValueChange={setSelectedBase} disabled={calculating || syncing}>
                       <SelectTrigger><SelectValue placeholder="Select a base" /></SelectTrigger>
                       <SelectContent>
                         {bases.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
@@ -375,7 +415,7 @@ const NewJobPage = () => {
                     {loadingTables ? (
                       <p className="text-sm text-muted-foreground">Loading tables...</p>
                     ) : (
-                      <Select value={selectedTable} onValueChange={setSelectedTable}>
+                      <Select value={selectedTable} onValueChange={setSelectedTable} disabled={calculating || syncing}>
                         <SelectTrigger><SelectValue placeholder="Select a table" /></SelectTrigger>
                         <SelectContent>
                           {tables.map((t) => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
@@ -390,7 +430,17 @@ const NewJobPage = () => {
             {/* Column Mapping */}
             {fields.length > 0 && (
               <Card>
-                <CardHeader><CardTitle className="text-base">Column Mapping</CardTitle></CardHeader>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-base">Column Mapping</CardTitle>
+                  {mappingStatus === "loading" && <span className="text-xs text-muted-foreground">Loading mapping...</span>}
+                  {mappingStatus === "saving" && <span className="text-xs text-amber-500 font-medium">Saving mapping...</span>}
+                  {mappingStatus === "saved" && <span className="text-xs text-green-600 font-medium">✓ Mapping saved</span>}
+                  {mappingStatus === "error" && (
+                    <span className="text-xs text-destructive font-medium" title={mappingError ?? "Error saving mapping"}>
+                      ✕ Mapping not saved
+                    </span>
+                  )}
+                </CardHeader>
                 <CardContent className="space-y-4">
                   {[
                     { label: "Start Address", value: startCol, onChange: setStartCol, optional: false },
@@ -403,7 +453,11 @@ const NewJobPage = () => {
                   ].map(({ label, value, onChange, optional }) => (
                     <div key={label} className="space-y-2">
                       <Label>{label}{optional && <span className="text-muted-foreground"> (optional)</span>}</Label>
-                      <Select value={value || undefined} onValueChange={(v) => onChange(v === "__none__" ? "" : v)}>
+                      <Select
+                        value={value || undefined}
+                        onValueChange={(v) => onChange(v === "__none__" ? "" : v)}
+                        disabled={calculating || syncing}
+                      >
                         <SelectTrigger><SelectValue placeholder={`Select ${label}`} /></SelectTrigger>
                         <SelectContent>
                           {optional && <SelectItem value="__none__">None</SelectItem>}
@@ -431,11 +485,16 @@ const NewJobPage = () => {
                         step="0.01"
                         value={ratePerUnit}
                         onChange={(e) => setRatePerUnit(Math.max(0, Number(e.target.value) || 0))}
+                        disabled={calculating || syncing}
                       />
                     </div>
                     <div className="space-y-2">
                       <Label>Unit</Label>
-                      <Select value={rateUnit} onValueChange={(v) => setRateUnit(v as RateUnit)}>
+                      <Select
+                        value={rateUnit}
+                        onValueChange={(v) => setRateUnit(v as RateUnit)}
+                        disabled={calculating || syncing}
+                      >
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="mi">Per mile</SelectItem>
@@ -453,6 +512,7 @@ const NewJobPage = () => {
                       variant="outline"
                       size="sm"
                       onClick={() => { setRatePerUnit(DEFAULT_RATE_PER_MILE); setRateUnit("mi"); }}
+                      disabled={calculating || syncing}
                     >
                       Reset to IRS rate
                     </Button>
@@ -464,17 +524,30 @@ const NewJobPage = () => {
             {/* Actions */}
             {startCol && endCol && distanceCol && (
               <div className="flex gap-3">
-                <Button onClick={handlePreview} disabled={loadingPreview}>
+                <Button onClick={handlePreview} disabled={loadingPreview || calculating || syncing}>
                   {loadingPreview ? "Loading..." : "Fetch Preview"}
                 </Button>
                 {preview.length > 0 && (
-                  <Button onClick={handleCalculate} disabled={calculating}>
+                  <Button onClick={handleCalculate} disabled={calculating || syncing}>
                     {calculating ? "Calculating..." : "Calculate Distances"}
                   </Button>
                 )}
                 {distances.length > 0 && (
-                  <Button onClick={handleSync} disabled={syncing}>
-                    {syncing ? "Syncing..." : "Sync to Airtable"}
+                  <Button
+                    onClick={handleSync}
+                    disabled={
+                      syncing ||
+                      calculating ||
+                      mappingStatus === "saving" ||
+                      mappingStatus === "error" ||
+                      mappingStatus === "loading"
+                    }
+                  >
+                    {syncing
+                      ? "Syncing..."
+                      : failedSyncIds.length > 0
+                      ? `Retry Failed Records (${failedSyncIds.length})`
+                      : "Sync to Airtable"}
                   </Button>
                 )}
               </div>
