@@ -1,7 +1,7 @@
 import { buildSyncRecords } from "@/lib/jobSync";
 import type { DistanceResult } from "@/services/distance";
 import { upsertMapping, type RateUnit } from "@/services/mappings";
-import { syncRecords, type SyncResult } from "@/services/airtable";
+import { syncRecords, type SyncResult, type SyncProgress } from "@/services/airtable";
 import { insertLog } from "@/services/logs";
 
 export interface ExecuteJobSyncParams {
@@ -19,18 +19,22 @@ export interface ExecuteJobSyncParams {
   rateUnit: RateUnit;
   distances: DistanceResult[];
   purposes: Record<string, string>;
+  confirmedSyncIds: string[];
   failedSyncIds: string[];
   syncedCount: number | null;
   provider: string;
   calculating: boolean;
   syncing: boolean;
+  generatingPurposes?: boolean;
+  confirmWithoutPurposes?: boolean;
   upsertMappingFn?: typeof upsertMapping;
   syncRecordsFn?: typeof syncRecords;
   insertLogFn?: typeof insertLog;
   setSyncing: (syncing: boolean) => void;
   setMappingStatus: (status: "idle" | "loading" | "saving" | "saved" | "error") => void;
   setMappingError: (err: string | null) => void;
-  setSyncProgress: (progress: { synced: number; total: number }) => void;
+  setSyncProgress: (progress: SyncProgress) => void;
+  setConfirmedSyncIds: (ids: string[]) => void;
   setFailedSyncIds: (ids: string[]) => void;
   setSyncedCount: (count: number) => void;
   setShowSummary: (show: boolean) => void;
@@ -53,11 +57,13 @@ export async function executeJobSync(params: ExecuteJobSyncParams): Promise<void
     rateUnit,
     distances,
     purposes,
+    confirmedSyncIds,
     failedSyncIds,
-    syncedCount,
     provider,
     calculating,
     syncing,
+    generatingPurposes = false,
+    confirmWithoutPurposes = false,
     upsertMappingFn = upsertMapping,
     syncRecordsFn = syncRecords,
     insertLogFn = insertLog,
@@ -65,6 +71,7 @@ export async function executeJobSync(params: ExecuteJobSyncParams): Promise<void
     setMappingStatus,
     setMappingError,
     setSyncProgress,
+    setConfirmedSyncIds,
     setFailedSyncIds,
     setSyncedCount,
     setShowSummary,
@@ -73,6 +80,16 @@ export async function executeJobSync(params: ExecuteJobSyncParams): Promise<void
 
   if (!distances.length || !selectedTable || !user) return;
   if (calculating || syncing) return;
+
+  // 1. Guard against premature sync while automatic AI purpose generation is running
+  if (generatingPurposes && Boolean(purposeCol || notesCol) && !confirmWithoutPurposes) {
+    toast({
+      title: "AI purposes generating",
+      description: "Please wait for AI business purposes to finish generating before syncing.",
+      variant: "destructive",
+    });
+    return;
+  }
 
   if (!startCol || !endCol || !distanceCol) {
     toast({
@@ -83,9 +100,40 @@ export async function executeJobSync(params: ExecuteJobSyncParams): Promise<void
     return;
   }
 
+  // 2. Build sync records; exclude already confirmed records to prevent duplicate sync
+  const withPurpose = distances.map((d) => ({ ...d, purposeText: purposes[d.record_id] }));
+  const allSyncRecords = buildSyncRecords(
+    withPurpose,
+    { cost: Boolean(costCol), status: Boolean(statusCol), purpose: Boolean(purposeCol) },
+    ratePerUnit,
+    rateUnit,
+  );
+
+  const pendingRecords = allSyncRecords.filter((r) => !confirmedSyncIds.includes(r.id));
+
+  if (allSyncRecords.length > 0 && pendingRecords.length === 0) {
+    toast({
+      title: "All records synced",
+      description: "All records for this job have already been confirmed in Airtable.",
+    });
+    return;
+  }
+
+  const recordsToSync = failedSyncIds.length > 0
+    ? pendingRecords.filter((r) => failedSyncIds.includes(r.id))
+    : pendingRecords;
+
+  if (recordsToSync.length === 0) {
+    toast({
+      title: "No records to sync",
+      description: "No pending or failed records remain to be synced.",
+    });
+    return;
+  }
+
   setSyncing(true);
 
-  // 1. Await and confirm mapping persistence before initiating Airtable sync
+  // 3. Await and confirm mapping persistence before initiating Airtable sync
   try {
     setMappingStatus("saving");
     setMappingError(null);
@@ -116,20 +164,7 @@ export async function executeJobSync(params: ExecuteJobSyncParams): Promise<void
     return;
   }
 
-  // 2. Build sync records; if retrying after partial failure, only send failed records
-  const withPurpose = distances.map((d) => ({ ...d, purposeText: purposes[d.record_id] }));
-  const allSyncRecords = buildSyncRecords(
-    withPurpose,
-    { cost: Boolean(costCol), status: Boolean(statusCol), purpose: Boolean(purposeCol) },
-    ratePerUnit,
-    rateUnit,
-  );
-
-  const recordsToSync = failedSyncIds.length > 0
-    ? allSyncRecords.filter((r) => failedSyncIds.includes(r.id))
-    : allSyncRecords;
-
-  setSyncProgress({ synced: 0, total: recordsToSync.length });
+  setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: recordsToSync.length });
 
   try {
     const result: SyncResult = await syncRecordsFn(
@@ -138,19 +173,25 @@ export async function executeJobSync(params: ExecuteJobSyncParams): Promise<void
         tableId: selectedTable,
         records: recordsToSync,
       },
-      (synced, total) => setSyncProgress({ synced, total })
+      (progress) => setSyncProgress(progress)
     );
 
-    // Track failed records for safe retry
-    setFailedSyncIds(result.failedIds);
+    // Track confirmed IDs and failed/indeterminate IDs for safe retry
+    const nextConfirmedIds = Array.from(new Set([...confirmedSyncIds, ...result.succeededIds]));
+    setConfirmedSyncIds(nextConfirmedIds);
 
-    // Accumulate confirmed writes
-    const previouslySynced = syncedCount ?? 0;
-    const totalSyncedNow = previouslySynced + result.synced;
-    setSyncedCount(totalSyncedNow);
+    const indetCount = result.indeterminate ?? 0;
+    const retryableIds = Array.from(new Set([
+      ...result.failedIds,
+      ...(result.indeterminateIds ?? []),
+    ]));
+    setFailedSyncIds(retryableIds);
+
+    // Cumulative confirmed writes across all attempts for this job
+    setSyncedCount(nextConfirmedIds.length);
     setShowSummary(true);
 
-    // 3. Audit log reflects actual confirmed writes only; log failure must not report sync failure
+    // 4. Audit log reflects actual newly confirmed writes only; log failure must not report sync failure
     if (result.synced > 0) {
       try {
         await insertLogFn({
@@ -169,22 +210,34 @@ export async function executeJobSync(params: ExecuteJobSyncParams): Promise<void
       }
     }
 
-    // 4. Distinguish 100% success, partial success, and 0% failure
-    if (result.synced > 0 && result.failed === 0) {
+    // 5. Distinguish full success, partial success, complete failure, and indeterminate network outcomes
+    if (result.synced > 0 && result.failed === 0 && indetCount === 0) {
       toast({
         title: "Sync complete",
         description: `All ${result.synced} records updated successfully.`,
       });
-    } else if (result.synced > 0 && result.failed > 0) {
+    } else if (result.synced === 0 && indetCount > 0 && result.failed === 0) {
       toast({
-        title: "Partial sync",
-        description: `${result.synced} records updated, ${result.failed} records failed. You can retry the failed records.`,
+        title: "Sync outcome indeterminate",
+        description: `Network error occurred. ${indetCount} record(s) could not be confirmed in Airtable. You can retry.`,
         variant: "destructive",
       });
-    } else if (result.failed > 0) {
+    } else if (result.synced === 0 && result.failed > 0 && indetCount === 0) {
       toast({
         title: "Sync failed",
         description: `All ${result.failed} records failed to sync. ${result.errors[0] || ""}`,
+        variant: "destructive",
+      });
+    } else {
+      const parts = [
+        result.synced > 0 ? `${result.synced} records updated` : null,
+        result.failed > 0 ? `${result.failed} records failed` : null,
+        indetCount > 0 ? `${indetCount} unconfirmed due to network error` : null,
+      ].filter(Boolean).join(", ");
+
+      toast({
+        title: "Partial sync",
+        description: `${parts}. You can retry unconfirmed records.`,
         variant: "destructive",
       });
     }

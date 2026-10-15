@@ -3,10 +3,11 @@ import PurposeCell from "@/components/job/PurposeCell";
 import FixAddressRow from "@/components/job/FixAddressRow";
 import { generatePurposes, AiAssistError } from "@/services/aiAssist";
 import { executeJobSync } from "@/lib/newJobSync";
+import { buildSyncRecords } from "@/lib/jobSync";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
-import { listBases, listTables, readRecords } from "@/services/airtable";
+import { listBases, listTables, readRecords, type SyncProgress } from "@/services/airtable";
 import { calculateDistances, AddressPair, DistanceResult } from "@/services/distance";
 import {
   getMapping,
@@ -14,6 +15,7 @@ import {
   calculateReimbursement,
   DEFAULT_RATE_PER_MILE,
   RateUnit,
+  MappingCoordinator,
 } from "@/services/mappings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,9 +69,11 @@ const NewJobPage = () => {
   // Table whose saved mapping finished loading; guards against cross-table upserts.
   const hydratedTableRef = useRef<string | null>(null);
   const activeTableIdRef = useRef<string | null>(null);
+  const calculatedMappingRef = useRef<{ start: string; end: string; distance: string } | null>(null);
   const [mappingStatus, setMappingStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("idle");
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [failedSyncIds, setFailedSyncIds] = useState<string[]>([]);
+  const [confirmedSyncIds, setConfirmedSyncIds] = useState<string[]>([]);
 
   const [preview, setPreview] = useState<PreviewRecord[]>([]);
   const [distances, setDistances] = useState<DistanceResult[]>([]);
@@ -82,7 +86,28 @@ const NewJobPage = () => {
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState({ synced: 0, total: 0 });
+  const [syncProgress, setSyncProgress] = useState<SyncProgress>({
+    processed: 0,
+    confirmed: 0,
+    failed: 0,
+    indeterminate: 0,
+    total: 0,
+  });
+
+  const mappingCoordinatorRef = useRef<MappingCoordinator | null>(null);
+  if (!mappingCoordinatorRef.current) {
+    mappingCoordinatorRef.current = new MappingCoordinator(upsertMapping, (status, err) => {
+      setMappingStatus(status);
+      setMappingError(err ?? null);
+      if (err) {
+        toast({
+          title: "Error saving column mapping",
+          description: err,
+          variant: "destructive",
+        });
+      }
+    });
+  }
 
   // Load settings (only flags, no raw keys)
   useEffect(() => {
@@ -106,12 +131,23 @@ const NewJobPage = () => {
       .finally(() => setLoadingBases(false));
   }, [hasPat]);
 
-  // Load tables on base select
+  // Load tables on base select; clear previous job state on base switch
   useEffect(() => {
     if (!hasPat || !selectedBase) return;
     setLoadingTables(true);
     setSelectedTable("");
     setFields([]);
+    setPreview([]);
+    setDistances([]);
+    setPurposes({});
+    setOverrides({});
+    setFailedSyncIds([]);
+    setConfirmedSyncIds([]);
+    setSyncedCount(null);
+    setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
+    calculatedMappingRef.current = null;
+    mappingCoordinatorRef.current?.setActiveTable(null);
+
     listTables(selectedBase)
       .then((data) => setTables(data.tables ?? []))
       .catch((e) => toast({ title: "Error loading tables", description: e.message, variant: "destructive" }))
@@ -122,11 +158,15 @@ const NewJobPage = () => {
   useEffect(() => {
     activeTableIdRef.current = selectedTable;
     hydratedTableRef.current = null; // blocks upserts until this table's mapping is loaded
+    mappingCoordinatorRef.current?.setActiveTable(selectedTable || null);
+
     setStartCol(""); setEndCol(""); setDistanceCol(""); setCostCol(""); setStatusCol("");
     setNotesCol(""); setPurposeCol("");
     setRatePerUnit(DEFAULT_RATE_PER_MILE); setRateUnit("mi");
     setPreview([]); setDistances([]); setPurposes({}); setOverrides({});
-    setFailedSyncIds([]); setSyncedCount(null);
+    setFailedSyncIds([]); setConfirmedSyncIds([]); setSyncedCount(null);
+    setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
+    calculatedMappingRef.current = null;
     setMappingError(null);
 
     if (!selectedTable) {
@@ -175,16 +215,29 @@ const NewJobPage = () => {
     return () => { cancelled = true; };
   }, [selectedTable, tables, user]);
 
-  // Save mapping when cols or rate settings change (only after hydration for this table).
+  // Save mapping with serialized coordinator (only after hydration for this table).
   useEffect(() => {
     if (!user || !selectedTable || !startCol || !endCol || !distanceCol) return;
     if (hydratedTableRef.current !== selectedTable || activeTableIdRef.current !== selectedTable) return;
 
-    let cancelled = false;
-    setMappingStatus("saving");
-    setMappingError(null);
+    // Invalidate calculated distances if source address-column mappings change
+    if (
+      calculatedMappingRef.current &&
+      (calculatedMappingRef.current.start !== startCol ||
+        calculatedMappingRef.current.end !== endCol ||
+        calculatedMappingRef.current.distance !== distanceCol) &&
+      distances.length > 0
+    ) {
+      setDistances([]);
+      setPurposes({});
+      setOverrides({});
+      setConfirmedSyncIds([]);
+      setFailedSyncIds([]);
+      setSyncedCount(null);
+      calculatedMappingRef.current = null;
+    }
 
-    upsertMapping({
+    mappingCoordinatorRef.current?.scheduleSave(selectedTable, {
       user_id: user.id,
       table_id: selectedTable,
       start_col_id: startCol,
@@ -196,27 +249,7 @@ const NewJobPage = () => {
       purpose_col_id: purposeCol || null,
       rate_per_unit: ratePerUnit,
       rate_unit: rateUnit,
-    })
-      .then(() => {
-        if (!cancelled && activeTableIdRef.current === selectedTable) {
-          setMappingStatus("saved");
-          setMappingError(null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled && activeTableIdRef.current === selectedTable) {
-          const msg = (err as Error).message || "Failed to save mapping";
-          setMappingStatus("error");
-          setMappingError(msg);
-          toast({
-            title: "Error saving column mapping",
-            description: msg,
-            variant: "destructive",
-          });
-        }
-      });
-
-    return () => { cancelled = true; };
+    });
   }, [user, selectedTable, startCol, endCol, distanceCol, costCol, statusCol, notesCol, purposeCol, ratePerUnit, rateUnit]);
 
   const handlePreview = async () => {
@@ -226,6 +259,13 @@ const NewJobPage = () => {
       const data = await readRecords(selectedBase, selectedTable, distanceCol, 5);
       setPreview(data.records ?? []);
       setDistances([]);
+      setPurposes({});
+      setOverrides({});
+      setFailedSyncIds([]);
+      setConfirmedSyncIds([]);
+      setSyncedCount(null);
+      setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
+      calculatedMappingRef.current = null;
     } catch (e: unknown) {
       toast({ title: "Error", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -265,10 +305,12 @@ const NewJobPage = () => {
     else toast({ title: "AI error", description: message, variant: "destructive" });
   };
 
-  /** Bulk mode: drafts purposes for every row with a note. Never fails the distance job. */
+  /** Bulk mode: drafts purposes for every row with a note that lacks one. Never fails the distance job and avoids duplicate credits. */
   const draftBulkPurposes = async () => {
-    if (!notesCol) return;
-    const rows = preview.map((r) => ({ id: r.id, note: noteOf(r).trim() })).filter((x) => x.note);
+    if (!notesCol || generatingPurposes) return;
+    const rows = preview
+      .map((r) => ({ id: r.id, note: noteOf(r).trim() }))
+      .filter((x) => x.note && !purposes[x.id]);
     if (!rows.length) return;
     setGeneratingPurposes(true);
     try {
@@ -311,6 +353,12 @@ const NewJobPage = () => {
   const handleCalculate = async () => {
     if (!preview.length || !startCol || !endCol) return;
     setCalculating(true);
+    calculatedMappingRef.current = { start: startCol, end: endCol, distance: distanceCol };
+    setConfirmedSyncIds([]);
+    setFailedSyncIds([]);
+    setSyncedCount(null);
+    setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
+
     try {
       const pairs: AddressPair[] = preview.map((r) => ({ record_id: r.id, ...addressesOf(r) }));
 
@@ -336,6 +384,9 @@ const NewJobPage = () => {
   };
 
   const handleSync = async () => {
+    // Ensure any background mapping saves have finished
+    await mappingCoordinatorRef.current?.waitForLatest();
+
     await executeJobSync({
       user,
       selectedBase,
@@ -351,15 +402,18 @@ const NewJobPage = () => {
       rateUnit,
       distances,
       purposes,
+      confirmedSyncIds,
       failedSyncIds,
       syncedCount,
       provider,
       calculating,
       syncing,
+      generatingPurposes,
       setSyncing,
       setMappingStatus,
       setMappingError,
       setSyncProgress,
+      setConfirmedSyncIds,
       setFailedSyncIds,
       setSyncedCount,
       setShowSummary,
@@ -371,6 +425,14 @@ const NewJobPage = () => {
   const okCount = distances.filter((d) => d.status === "ok").length;
   const failedCount = distances.filter((d) => d.status !== "ok").length;
   const showPurposeColumn = Boolean(purposeCol || notesCol || Object.keys(purposes).length > 0);
+  const allSyncRecords = buildSyncRecords(
+    distances.map((d) => ({ ...d, purposeText: purposes[d.record_id] })),
+    { cost: Boolean(costCol), status: Boolean(statusCol), purpose: Boolean(purposeCol) },
+    ratePerUnit,
+    rateUnit
+  );
+  const allSynced = allSyncRecords.length > 0 && allSyncRecords.every((r) => confirmedSyncIds.includes(r.id));
+  const hasFailedSync = failedSyncIds.length > 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -538,6 +600,8 @@ const NewJobPage = () => {
                     disabled={
                       syncing ||
                       calculating ||
+                      generatingPurposes ||
+                      allSynced ||
                       mappingStatus === "saving" ||
                       mappingStatus === "error" ||
                       mappingStatus === "loading"
@@ -545,7 +609,11 @@ const NewJobPage = () => {
                   >
                     {syncing
                       ? "Syncing..."
-                      : failedSyncIds.length > 0
+                      : generatingPurposes
+                      ? "Generating AI Purposes..."
+                      : allSynced
+                      ? "✓ All Records Synced"
+                      : hasFailedSync
                       ? `Retry Failed Records (${failedSyncIds.length})`
                       : "Sync to Airtable"}
                   </Button>
@@ -557,10 +625,15 @@ const NewJobPage = () => {
             {syncing && syncProgress.total > 0 && (
               <Card>
                 <CardContent className="py-4 space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    Synced {syncProgress.synced} of {syncProgress.total} records
-                  </p>
-                  <Progress value={(syncProgress.synced / syncProgress.total) * 100} />
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Processing: {syncProgress.processed} of {syncProgress.total}</span>
+                    <span>
+                      {syncProgress.confirmed} confirmed
+                      {syncProgress.failed > 0 ? `, ${syncProgress.failed} failed` : ""}
+                      {syncProgress.indeterminate > 0 ? `, ${syncProgress.indeterminate} unconfirmed` : ""}
+                    </span>
+                  </div>
+                  <Progress value={(syncProgress.processed / syncProgress.total) * 100} />
                 </CardContent>
               </Card>
             )}
@@ -695,7 +768,10 @@ const NewJobPage = () => {
                 setPurposes({});
                 setOverrides({});
                 setSyncedCount(null);
-                setSyncProgress({ synced: 0, total: 0 });
+                setConfirmedSyncIds([]);
+                setFailedSyncIds([]);
+                setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
+                calculatedMappingRef.current = null;
               }}
             >
               Tabloyu temizle
