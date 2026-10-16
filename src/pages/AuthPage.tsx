@@ -72,7 +72,7 @@ const AuthPage = () => {
       return;
     }
     if (result.redirected) return;
-    navigate("/dashboard");
+    navigate(consumePostAuthRedirect() ?? "/dashboard");
   };
 
   const handleForgotPassword = async () => {
@@ -94,7 +94,7 @@ const AuthPage = () => {
     <div className="flex min-h-screen flex-col bg-background">
       <Seo
         title="AirMileX — Airtable Mileage Tracking & Distance Calculator"
-        description="Automate your Airtable mileage tracking. Calculate driving distances in batches and generate IRS-compliant logs with zero manual effort."
+        description="Automate your Airtable mileage tracking. Calculate driving distances in batches and generate detailed mileage logs with zero manual effort."
         path="/"
       />
       <main className="flex-1 flex items-center justify-center px-4 py-12">
@@ -108,7 +108,7 @@ const AuthPage = () => {
               AirMileX: Automate Your Airtable Mileage Tracking
             </h1>
             <p className="text-lg text-muted-foreground leading-relaxed">
-              Instantly calculate driving distances between addresses in your Airtable base and generate IRS-compliant mileage logs with zero manual effort.
+              Instantly calculate driving distances between addresses in your Airtable base and generate detailed mileage logs with zero manual effort.
             </p>
             <h2 className="sr-only">How AirMileX works</h2>
             <div className="space-y-4 pt-2">

@@ -11,6 +11,14 @@ import Footer from "@/components/Footer";
 import Seo from "@/components/Seo";
 import { Check, Info } from "lucide-react";
 
+/**
+ * Minimal launch-readiness flag for paid credit checkout.
+ * Defaults to false until Phase 5 completes production Paddle credential provisioning,
+ * webhook verification, and end-to-end sandbox/live transaction validation.
+ */
+export const IS_PAID_CHECKOUT_ENABLED =
+  import.meta.env.VITE_ENABLE_PADDLE_CHECKOUT === "true";
+
 const PricingPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -19,6 +27,12 @@ const PricingPage = () => {
   const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
 
   const handleBuy = async () => {
+    if (!IS_PAID_CHECKOUT_ENABLED) {
+      setPaymentNotice(
+        "Paid credit checkout is undergoing final payment gateway verification and will open in Phase 5. Please continue using your 50 free credits in the meantime."
+      );
+      return;
+    }
     if (!user) {
       navigate("/?next=/pricing");
       return;
@@ -119,7 +133,7 @@ const PricingPage = () => {
                   </li>
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                    <span>Failed/unroutable addresses automatically refunded</span>
+                    <span>Unroutable calculations credited back per system refund rules (empty rows cost 0 credits)</span>
                   </li>
                 </ul>
                 <Button variant="outline" className="w-full" asChild>
@@ -133,7 +147,9 @@ const PricingPage = () => {
             {/* Paid Tier Card */}
             <Card className="flex flex-col justify-between border-primary/50 relative shadow-sm">
               <div className="absolute -top-3 right-4">
-                <Badge className="bg-primary text-primary-foreground font-semibold">Pay As You Go</Badge>
+                <Badge className={IS_PAID_CHECKOUT_ENABLED ? "bg-primary text-primary-foreground font-semibold" : "bg-muted text-muted-foreground border border-border"}>
+                  {IS_PAID_CHECKOUT_ENABLED ? "Pay As You Go" : "Checkout in Phase 5"}
+                </Badge>
               </div>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -165,11 +181,32 @@ const PricingPage = () => {
                   </li>
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                    <span>Guaranteed refund protection on unroutable records</span>
+                    <span>Credit refund policy applies to unroutable records (indeterminate outcomes flagged)</span>
                   </li>
                 </ul>
-                <Button className="w-full" onClick={handleBuy} disabled={buying}>
-                  {buying ? "Processing…" : "Buy 500 Credits ($9)"}
+
+                {!IS_PAID_CHECKOUT_ENABLED && (
+                  <Alert className="border-amber-500/30 bg-amber-500/10 text-left py-2.5">
+                    <Info className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <AlertTitle className="text-xs font-semibold text-foreground">Launch Readiness Notice</AlertTitle>
+                    <AlertDescription className="text-xs text-muted-foreground leading-normal mt-0.5">
+                      Paid credit checkout is undergoing final payment gateway verification and will open in Phase 5.
+                      Please enjoy your <strong>50 complimentary credits</strong> in the meantime.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <Button
+                  className="w-full"
+                  onClick={handleBuy}
+                  disabled={!IS_PAID_CHECKOUT_ENABLED || buying}
+                  title={!IS_PAID_CHECKOUT_ENABLED ? "Paid checkout will open in Phase 5 upon payment verification" : undefined}
+                >
+                  {!IS_PAID_CHECKOUT_ENABLED
+                    ? "Checkout Opening Soon ($9)"
+                    : buying
+                    ? "Processing…"
+                    : "Buy 500 Credits ($9)"}
                 </Button>
               </CardContent>
             </Card>

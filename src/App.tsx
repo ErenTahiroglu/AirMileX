@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
+import { BrowserRouter, Route, Routes, Navigate, useSearchParams } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -17,14 +17,23 @@ import PrivacyPage from "./pages/PrivacyPage";
 import RefundPage from "./pages/RefundPage";
 import OAuthConsent from "./pages/OAuthConsent";
 import NotFound from "./pages/NotFound";
-import { consumePostAuthRedirect } from "@/lib/postAuthRedirect";
+import { consumePostAuthRedirect, isSafeRelativePath } from "@/lib/postAuthRedirect";
 
 const queryClient = new QueryClient();
 
 const AuthRedirect = () => {
   const { user, loading } = useAuth();
+  const [searchParams] = useSearchParams();
   if (loading) return null;
-  if (user) return <Navigate to={consumePostAuthRedirect() ?? "/dashboard"} replace />;
+  if (user) {
+    const urlNext = searchParams.get("next");
+    const safeUrlNext = isSafeRelativePath(urlNext) ? urlNext : null;
+    const target = safeUrlNext ?? consumePostAuthRedirect() ?? "/dashboard";
+    if (safeUrlNext) {
+      consumePostAuthRedirect();
+    }
+    return <Navigate to={target} replace />;
+  }
   return <AuthPage />;
 };
 

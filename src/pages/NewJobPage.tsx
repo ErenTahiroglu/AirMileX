@@ -685,7 +685,7 @@ const NewJobPage = () => {
               <div className="space-y-1">
                 <h3 className="text-lg font-semibold text-foreground">Connect Airtable to Start</h3>
                 <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                  You have <strong className="text-foreground">{credits} free mileage credits</strong> available. Connect your Airtable account with a Personal Access Token to load your addresses and calculate driving distances.
+                  You have <strong className="text-foreground">{credits} mileage credits</strong> available. Connect your Airtable account with a Personal Access Token to load your addresses and calculate driving distances.
                 </p>
               </div>
               <Button asChild>
