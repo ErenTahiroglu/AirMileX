@@ -8,6 +8,7 @@ import {
   paginateAirtableRecords,
   projectMappedFields,
   syncWithBatching,
+  isQuotaLimitError,
   type AirtableRecordItem,
   type PatchRecord,
 } from "./airtable-records.ts";
@@ -80,6 +81,15 @@ describe("batched sync outcomes", () => {
     let call = 0;
     const r = await syncWithBatching(recs(2), async (b) => {
       if (call++ === 0) throw new PatchError("Airtable 429", 429);
+      return b.map((x) => x.id);
+    }, noSleep);
+    expect(r.synced).toBe(2);
+  });
+
+  it("retries 429 when error is AirtablePaginationError", async () => {
+    let call = 0;
+    const r = await syncWithBatching(recs(2), async (b) => {
+      if (call++ === 0) throw new AirtablePaginationError("Airtable 429: Too Many Requests", 429);
       return b.map((x) => x.id);
     }, noSleep);
     expect(r.synced).toBe(2);
@@ -344,4 +354,62 @@ describe("AirMileX Phase 2A: Airtable Offset Pagination", () => {
     expect(projected[0].fields["Internal SSN"]).toBeUndefined();
     expect(projected[0].fields["Unmapped Secret"]).toBeUndefined();
   });
+
+  it("Requirement: isQuotaLimitError detects PUBLIC_API_BILLING_LIMIT_EXCEEDED", () => {
+    expect(isQuotaLimitError(429, "PUBLIC_API_BILLING_LIMIT_EXCEEDED: You have exceeded the monthly limit")).toBe(true);
+    expect(isQuotaLimitError(429, "MONTHLY_APPROVED_USAGE_LIMIT_EXCEEDED")).toBe(true);
+    expect(isQuotaLimitError(402, "Payment Required")).toBe(true);
+    expect(isQuotaLimitError(429, "TOO_MANY_REQUESTS")).toBe(false);
+  });
+
+  it("Requirement: PageSize propagation allows 150-record retrieval to continue without skipping records", async () => {
+    // 200 total records in simulated Airtable
+    const totalRecords = generateRecords(200, 0);
+    const requestedPageSizes: Array<number | undefined> = [];
+
+    // Simulated Airtable API handler respecting pageSize
+    const fakeAirtableFetch = async (offset?: string, pageSize?: number) => {
+      requestedPageSizes.push(pageSize);
+      const startIdx = offset ? parseInt(offset.replace("offset_", ""), 10) : 0;
+      const size = pageSize ?? 100;
+      const slice = totalRecords.slice(startIdx, startIdx + size);
+      const nextIdx = startIdx + slice.length;
+      const nextOffset = nextIdx < totalRecords.length ? `offset_${nextIdx}` : undefined;
+      return {
+        records: slice,
+        offset: nextOffset,
+      };
+    };
+
+    // First run: retrieves 150 records
+    const run1 = await paginateAirtableRecords(fakeAirtableFetch, { maxRecords: 150, sleep: async () => {} });
+
+    expect(run1.records.length).toBe(150);
+    expect(run1.total).toBe(150);
+    expect(run1.limitReached).toBe(true);
+    expect(run1.exhausted).toBe(false);
+    expect(run1.offset).toBe("offset_150");
+    expect(run1.records[0].id).toBe("rec_0");
+    expect(run1.records[149].id).toBe("rec_149");
+
+    // Verify pageSizes requested: first page 100, second page 50 (never blindly requesting 100 on second page)
+    expect(requestedPageSizes).toEqual([100, 50]);
+
+    // Second run: continuation using the offset from run1, requesting up to 150 records
+    const run2 = await paginateAirtableRecords(
+      async (offset, pageSize) => fakeAirtableFetch(offset ?? run1.offset, pageSize),
+      { maxRecords: 150, sleep: async () => {} }
+    );
+
+    // Remaining records from 150 to 199 (50 records)
+    expect(run2.records.length).toBe(50);
+    expect(run2.total).toBe(50);
+    expect(run2.exhausted).toBe(true);
+    expect(run2.limitReached).toBe(false);
+    expect(run2.offset).toBeUndefined();
+    // CRITICAL: First record of run2 is exactly rec_150, no records skipped!
+    expect(run2.records[0].id).toBe("rec_150");
+    expect(run2.records[49].id).toBe("rec_199");
+  });
 });
+

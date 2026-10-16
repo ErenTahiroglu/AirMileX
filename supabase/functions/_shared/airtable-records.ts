@@ -88,8 +88,11 @@ export async function syncWithBatching(
         const missing = batch.filter((r) => !returned.has(r.id)).length;
         if (missing) errors.push(`Batch at index ${i}: Airtable did not confirm ${missing} record(s).`);
         break;
-      } catch (err) {
-        const status = err instanceof PatchError ? err.status : 0;
+      } catch (err: any) {
+        const status =
+          err instanceof PatchError || err instanceof AirtablePaginationError
+            ? err.status
+            : (typeof err?.status === "number" ? err.status : 0);
         if (status === 429 && attempt < maxRetries - 1) {
           await sleep(2 ** attempt * 1000);
           continue;
@@ -137,7 +140,7 @@ export class AirtablePaginationError extends Error {
 export function isQuotaLimitError(status?: number, message?: string): boolean {
   if (status === 402) return true;
   if (!message) return false;
-  return /MONTHLY_APPROVED_USAGE_LIMIT_EXCEEDED|USAGE_LIMIT_EXCEEDED|PAYMENT_REQUIRED|exceeded your monthly/i.test(message);
+  return /MONTHLY_APPROVED_USAGE_LIMIT_EXCEEDED|PUBLIC_API_BILLING_LIMIT_EXCEEDED|USAGE_LIMIT_EXCEEDED|PAYMENT_REQUIRED|exceeded your monthly/i.test(message);
 }
 
 export function isInvalidOffsetError(status?: number, message?: string): boolean {
@@ -195,7 +198,7 @@ export function projectMappedFields(
  * - Never silently returns partial data on failure.
  */
 export async function paginateAirtableRecords(
-  fetchPage: (offset?: string) => Promise<{
+  fetchPage: (offset?: string, pageSize?: number) => Promise<{
     records?: AirtableRecordItem[];
     offset?: string;
     status?: number;
@@ -218,6 +221,9 @@ export async function paginateAirtableRecords(
   let nextOffset: string | undefined = undefined;
 
   while (allRecords.length < maxRecords) {
+    const remainingSlots = maxRecords - allRecords.length;
+    const currentPageSize = Math.min(opts.pageSize ?? 100, remainingSlots);
+
     let pageRes: {
       records?: AirtableRecordItem[];
       offset?: string;
@@ -228,7 +234,7 @@ export async function paginateAirtableRecords(
 
     for (let attempt = 0; ; attempt++) {
       try {
-        pageRes = await fetchPage(currentOffset);
+        pageRes = await fetchPage(currentOffset, currentPageSize);
         break;
       } catch (err: any) {
         const status = err?.status ?? (err instanceof AirtablePaginationError ? err.status : undefined);
@@ -284,7 +290,6 @@ export async function paginateAirtableRecords(
 
     pageCount++;
     const pageRecords = pageRes.records;
-    const remainingSlots = maxRecords - allRecords.length;
 
     if (pageRecords.length <= remainingSlots) {
       allRecords.push(...pageRecords);

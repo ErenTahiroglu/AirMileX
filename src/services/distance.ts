@@ -22,15 +22,17 @@ export interface CalculateDistancesResponse {
 }
 
 export const calculateDistances = async (
-  pairs: AddressPair[]
+  pairs: AddressPair[],
+  options?: { is_bulk?: boolean }
 ): Promise<CalculateDistancesResponse> => {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Not authenticated");
 
   const response = await supabase.functions.invoke("distance-proxy", {
-    body: { pairs },
+    body: { pairs, is_bulk: options?.is_bulk ?? false },
   });
 
   if (response.error) throw new Error(response.error.message);
   return response.data;
 };
+
