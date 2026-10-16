@@ -3,6 +3,9 @@ import {
   executeBulkDistanceCalculation,
   filterValidAddressPairs,
   InsufficientCreditsError,
+  partitionRecordsForContinuation,
+  formatCalculationNotification,
+  isIndeterminateResult,
   type BulkRecordInput,
 } from "./bulkCalculation";
 import type { AddressPair, CalculateDistancesResponse, DistanceResult } from "@/services/distance";
@@ -262,6 +265,181 @@ describe("AirMileX Phase 2B: Bulk Distance Calculation Orchestrator", () => {
     expect(firstResult.status).toBe("error");
     expect(firstResult.error).toContain("not configured");
     expect(firstResult.error_type).toBe("provider");
+  });
+
+  it("9. Task B1: Continuation partition excludes BOTH confirmed-success and indeterminate records, even when 0 records succeeded", () => {
+    const preview = [
+      { id: "rec1", start: "100 Main St", end: "200 Main St" },
+      { id: "rec2", start: "300 Market St", end: "400 Market St" },
+      { id: "rec3", start: "500 Elm St", end: "600 Elm St" },
+      { id: "rec4", start: "700 Pine St", end: "800 Pine St" },
+    ];
+
+    // Scenario: First batch had 2 records: 1 failed with regular error, 1 failed with indeterminate network drop. 0 ok records!
+    const distances: DistanceResult[] = [
+      {
+        record_id: "rec1",
+        distance_km: 0,
+        distance_mi: 0,
+        status: "error",
+        error: "Address not found",
+        error_type: "not_found",
+      },
+      {
+        record_id: "rec2",
+        distance_km: 0,
+        distance_mi: 0,
+        status: "error",
+        error: "Indeterminate network outcome: 504 Gateway Timeout",
+        error_type: "indeterminate",
+      },
+    ];
+
+    const {
+      okRecordIds,
+      indeterminateRecordIds,
+      remainingToCalculate,
+      indeterminateRecords,
+    } = partitionRecordsForContinuation(preview, distances);
+
+    expect(okRecordIds.size).toBe(0);
+    expect(indeterminateRecordIds.size).toBe(1);
+    expect(indeterminateRecordIds.has("rec2")).toBe(true);
+
+    // Normal continuation MUST NOT contain rec2 (indeterminate) even though okRecordIds.size === 0!
+    // It should contain rec1 (can be re-run or skipped) and rec3, rec4 (uncalculated).
+    expect(remainingToCalculate.map((r) => r.id)).toEqual(["rec1", "rec3", "rec4"]);
+    expect(remainingToCalculate.some((r) => r.id === "rec2")).toBe(false);
+
+    // Indeterminate records are separated out for explicit user confirmation
+    expect(indeterminateRecords.map((r) => r.id)).toEqual(["rec2"]);
+  });
+
+  it("10. Task B1: When records succeed and some are indeterminate, normal continuation excludes both", () => {
+    const preview = [
+      { id: "rec1" },
+      { id: "rec2" },
+      { id: "rec3" },
+      { id: "rec4" },
+    ];
+
+    const distances: DistanceResult[] = [
+      { record_id: "rec1", distance_km: 10, distance_mi: 6.2, status: "ok" },
+      {
+        record_id: "rec2",
+        distance_km: 0,
+        distance_mi: 0,
+        status: "error",
+        error: "Indeterminate network outcome: connection reset",
+        error_type: "indeterminate",
+      },
+    ];
+
+    const { remainingToCalculate, indeterminateRecords } = partitionRecordsForContinuation(
+      preview,
+      distances
+    );
+
+    // rec1 (ok) and rec2 (indeterminate) are BOTH excluded from remainingToCalculate
+    expect(remainingToCalculate.map((r) => r.id)).toEqual(["rec3", "rec4"]);
+    expect(indeterminateRecords.map((r) => r.id)).toEqual(["rec2"]);
+  });
+
+  it("11. Task B2: Captures backend refund_error and surfaces it in BulkCalculationResult and onBatchComplete", async () => {
+    const records: BulkRecordInput[] = [
+      { id: "rec1", start: "100 Main St", end: "200 Main St" },
+    ];
+
+    let batchRefundError: string | undefined;
+
+    const mockCalculate = vi.fn().mockResolvedValue({
+      results: [
+        {
+          record_id: "rec1",
+          distance_km: 0,
+          distance_mi: 0,
+          status: "error" as const,
+          error: "Address not found",
+          error_type: "not_found" as const,
+        },
+      ],
+      credits_remaining: 10,
+      refund_error: "Refund RPC failed for 1 credit: Connection timeout",
+    });
+
+    const result = await executeBulkDistanceCalculation(records, {
+      availableCredits: 10,
+      onBatchComplete: (_batch, _credits, refundError) => {
+        batchRefundError = refundError;
+      },
+      calculateDistancesFn: mockCalculate,
+    });
+
+    expect(batchRefundError).toBe("Refund RPC failed for 1 credit: Connection timeout");
+    expect(result.refundErrors).toEqual(["Refund RPC failed for 1 credit: Connection timeout"]);
+  });
+
+  it("12. Task B2: Refreshes authoritative credit balance from DB when refund_error occurs", async () => {
+    const records: BulkRecordInput[] = [
+      { id: "rec1", start: "100 Main St", end: "200 Main St" },
+    ];
+
+    const mockCalculate = vi.fn().mockResolvedValue({
+      results: [
+        {
+          record_id: "rec1",
+          distance_km: 0,
+          distance_mi: 0,
+          status: "error" as const,
+          error: "Address not found",
+        },
+      ],
+      credits_remaining: 9, // Pre-refund balance
+      refund_error: "Refund RPC failed",
+    });
+
+    const mockFetchAuthoritativeCredits = vi.fn().mockResolvedValue(9);
+
+    const result = await executeBulkDistanceCalculation(records, {
+      availableCredits: 10,
+      calculateDistancesFn: mockCalculate,
+      fetchAuthoritativeCreditsFn: mockFetchAuthoritativeCredits,
+    });
+
+    // Authoritative balance was actively refreshed because a refund error occurred
+    expect(mockFetchAuthoritativeCredits).toHaveBeenCalledTimes(1);
+    expect(result.creditsRemaining).toBe(9);
+    expect(result.refundErrors).toContain("Refund RPC failed");
+  });
+
+  it("13. Task B2: formatCalculationNotification surfaces refund errors explicitly and never falsely claims failed rows were refunded", () => {
+    // Case A: Calculation has refund error -> destructive variant, explicit refund failure warning
+    const notifWithError = formatCalculationNotification(
+      { total: 5, ok: 3, error: 2, indeterminate: 0, skippedEmpty: 0 },
+      ["Refund RPC failed for 2 credits"]
+    );
+    expect(notifWithError.variant).toBe("destructive");
+    expect(notifWithError.title).toContain("refund errors");
+    expect(notifWithError.description).toContain("automatic credit refund failed (Refund RPC failed for 2 credits)");
+    expect(notifWithError.description).not.toContain("credits refunded");
+
+    // Case B: Calculation has errors but NO refund error -> confirmed refund stated
+    const notifRefunded = formatCalculationNotification(
+      { total: 5, ok: 3, error: 2, indeterminate: 0, skippedEmpty: 0 },
+      []
+    );
+    expect(notifRefunded.variant).toBe("default");
+    expect(notifRefunded.title).toBe("Calculation completed");
+    expect(notifRefunded.description).toContain("3 succeeded");
+    expect(notifRefunded.description).toContain("2 failed (credits refunded)");
+
+    // Case C: Calculation has indeterminate rows -> explicitly states not refunded
+    const notifIndet = formatCalculationNotification(
+      { total: 5, ok: 3, error: 0, indeterminate: 2, skippedEmpty: 0 },
+      []
+    );
+    expect(notifIndet.description).toContain("2 indeterminate (not refunded)");
+    expect(notifIndet.description).not.toContain("credits refunded");
   });
 });
 

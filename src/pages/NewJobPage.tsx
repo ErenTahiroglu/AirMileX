@@ -9,7 +9,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
 import { listBases, listTables, readRecords, readEligibleRecords, type SyncProgress } from "@/services/airtable";
 import { calculateDistances, AddressPair, DistanceResult } from "@/services/distance";
-import { executeBulkDistanceCalculation, type CalculationProgress } from "@/lib/bulkCalculation";
+import {
+  executeBulkDistanceCalculation,
+  partitionRecordsForContinuation,
+  formatCalculationNotification,
+  type CalculationProgress,
+} from "@/lib/bulkCalculation";
 import { Badge } from "@/components/ui/badge";
 import {
   getMapping,
@@ -428,20 +433,24 @@ const NewJobPage = () => {
     }
   };
 
+  const {
+    okRecordIds,
+    indeterminateRecordIds,
+    remainingToCalculate: remainingPreviewToCalculate,
+    indeterminateRecords,
+  } = partitionRecordsForContinuation(preview, distances);
+
   const validAddressCount = preview.filter((r) => {
     const addr = addressesOf(r);
     return Boolean(addr.start.trim() && addr.end.trim());
   }).length;
 
-  // Track completed records to avoid re-calculating or double-charging
-  const okRecordIds = new Set(distances.filter((d) => d.status === "ok").map((d) => d.record_id));
-  const indeterminateRecordIds = new Set(
-    distances
-      .filter((d) => d.status === "error" && (d.error_type === "indeterminate" || (d.error || "").toLowerCase().includes("indeterminate")))
-      .map((d) => d.record_id)
-  );
-  const remainingPreviewToCalculate = preview.filter((r) => !okRecordIds.has(r.id) && !indeterminateRecordIds.has(r.id));
   const validRemainingCount = remainingPreviewToCalculate.filter((r) => {
+    const addr = addressesOf(r);
+    return Boolean(addr.start.trim() && addr.end.trim());
+  }).length;
+
+  const validIndeterminateCount = indeterminateRecords.filter((r) => {
     const addr = addressesOf(r);
     return Boolean(addr.start.trim() && addr.end.trim());
   }).length;
@@ -483,7 +492,7 @@ const NewJobPage = () => {
         batchSize: 5,
         availableCredits: credits,
         isCancelled: () => cancelCalculationRef.current,
-        onBatchComplete: (batchResults, creditsRemaining) => {
+        onBatchComplete: (batchResults, creditsRemaining, refundError) => {
           setDistances((prev) => {
             const nextMap = new Map(prev.map((d) => [d.record_id, d]));
             for (const b of batchResults) nextMap.set(b.record_id, b);
@@ -491,6 +500,13 @@ const NewJobPage = () => {
           });
           if (typeof creditsRemaining === "number") {
             setCredits(creditsRemaining);
+          }
+          if (refundError) {
+            toast({
+              title: "Refund error",
+              description: `Warning: Server failed to refund credits for failed rows: ${refundError}. Your credit balance may not reflect compensation.`,
+              variant: "destructive",
+            });
           }
         },
         onProgress: (p) => {
@@ -520,9 +536,11 @@ const NewJobPage = () => {
           description: `Stopped scheduling new batches. Completed results have been preserved (${res.summary.ok} ok, ${res.summary.error + res.summary.indeterminate} uncompleted).`,
         });
       } else {
+        const notif = formatCalculationNotification(res.summary, res.refundErrors);
         toast({
-          title: "Hesaplama tamamlandı",
-          description: `${res.summary.ok} satır başarılı, ${res.summary.error + res.summary.indeterminate} satır doğrulanamadı.`,
+          title: notif.title,
+          description: notif.description,
+          variant: notif.variant,
         });
       }
       // Note: Never auto-invoke draftBulkPurposes() for bulk calculations!
@@ -549,16 +567,46 @@ const NewJobPage = () => {
   };
 
   const handleCalculate = async () => {
-    const targetRecords = okRecordIds.size > 0 ? remainingPreviewToCalculate : preview;
-    await runCalculation(targetRecords, okRecordIds.size === 0);
+    const targetRecords = remainingPreviewToCalculate;
+    if (!targetRecords.length) return;
+    await runCalculation(targetRecords, distances.length === 0);
+  };
+
+  const handleRetryIndeterminate = async () => {
+    if (calculating || syncing) return;
+    if (validIndeterminateCount === 0) return;
+
+    if (credits < validIndeterminateCount) {
+      showCreditsToast(
+        `Retrying indeterminate records requires ${validIndeterminateCount} credits, but you only have ${credits} credits available. Please purchase more credits to proceed.`
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Warning: ${validIndeterminateCount} record(s) previously ended in an indeterminate state. Credits may have already been charged if the server processed them. Re-running will consume up to ${validIndeterminateCount} additional credit(s). Do you want to proceed with retrying these records?`
+    );
+    if (!confirmed) return;
+
+    await runCalculation(indeterminateRecords, false);
   };
 
   const handleResetAndRecalculateAll = async () => {
     if (calculating || syncing) return;
+
+    // Check credit sufficiency BEFORE clearing existing results and synchronization state
+    if (credits < validAddressCount) {
+      showCreditsToast(
+        `Recalculation requires ${validAddressCount} credits, but you only have ${credits} credits available. Please purchase more credits to proceed.`
+      );
+      return;
+    }
+
     const confirmed = window.confirm(
       `Recalculating all ${validAddressCount} valid record(s) will clear existing completed results and consume up to ${validAddressCount} credits. Do you want to proceed?`
     );
     if (!confirmed) return;
+
     setDistances([]);
     setConfirmedSyncIds([]);
     setFailedSyncIds([]);
@@ -789,12 +837,21 @@ const NewJobPage = () => {
                         >
                           {calculating
                             ? "Calculating..."
-                            : okRecordIds.size > 0
+                            : distances.length > 0
                             ? `Continue Calculation (${validRemainingCount} remaining, ${validRemainingCount} credits)`
                             : `Calculate Distances (${validAddressCount} credits)`}
                         </Button>
                       )}
-                      {okRecordIds.size > 0 && (
+                      {indeterminateRecordIds.size > 0 && validIndeterminateCount > 0 && (
+                        <Button
+                          variant="outline"
+                          onClick={handleRetryIndeterminate}
+                          disabled={calculating || syncing || credits < validIndeterminateCount}
+                        >
+                          {`Retry Indeterminate (${validIndeterminateCount} records, ${validIndeterminateCount} credits)`}
+                        </Button>
+                      )}
+                      {distances.length > 0 && (
                         <Button
                           variant="outline"
                           onClick={handleResetAndRecalculateAll}
@@ -851,8 +908,8 @@ const NewJobPage = () => {
                 {preview.length > 0 && (
                   <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
                     <span>
-                      {okRecordIds.size > 0
-                        ? `${okRecordIds.size} completed, ${validRemainingCount} valid remaining to calculate.`
+                      {distances.length > 0
+                        ? `${okRecordIds.size} completed, ${indeterminateRecordIds.size > 0 ? `${indeterminateRecordIds.size} indeterminate, ` : ""}${validRemainingCount} valid remaining to calculate.`
                         : `${validAddressCount} valid address pair(s) to calculate.`}
                       {preview.length - validAddressCount > 0 && ` (${preview.length - validAddressCount} invalid/empty address pair(s) excluded from credits)`}
                     </span>

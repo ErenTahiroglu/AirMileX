@@ -34,7 +34,11 @@ export interface BulkCalculationOptions {
   batchSize?: number; // default: 5
   availableCredits: number;
   isCancelled?: () => boolean;
-  onBatchComplete?: (batchResults: DistanceResult[], creditsRemaining?: number) => void;
+  onBatchComplete?: (
+    batchResults: DistanceResult[],
+    creditsRemaining?: number,
+    refundError?: string
+  ) => void;
   onProgress?: (progress: CalculationProgress) => void;
   calculateDistancesFn?: (
     pairs: AddressPair[],
@@ -54,6 +58,7 @@ export interface BulkCalculationSummary {
 export interface BulkCalculationResult {
   results: DistanceResult[];
   creditsRemaining?: number;
+  refundErrors: string[];
   cancelled: boolean;
   summary: BulkCalculationSummary;
 }
@@ -63,6 +68,87 @@ export const isNetworkTimeoutError = (msg: string): boolean =>
 
 export const isConfigurationError = (msg: string): boolean =>
   /not configured|configuration|operator map service|no maps api key/i.test(msg);
+
+export function isIndeterminateResult(result: DistanceResult): boolean {
+  return (
+    result.status === "error" &&
+    (result.error_type === "indeterminate" ||
+      (result.error || "").toLowerCase().includes("indeterminate"))
+  );
+}
+
+/**
+ * Partitions preview records into:
+ * - okRecordIds: confirmed successful results (never re-run in normal continuation)
+ * - indeterminateRecordIds: indeterminate network outcomes (require explicit confirmation to retry)
+ * - remainingToCalculate: records that have not yet been dispatched or are neither ok nor indeterminate
+ * - indeterminateRecords: records that ended in an indeterminate state
+ */
+export function partitionRecordsForContinuation<T extends { id: string }>(
+  preview: T[],
+  distances: DistanceResult[]
+): {
+  okRecordIds: Set<string>;
+  indeterminateRecordIds: Set<string>;
+  remainingToCalculate: T[];
+  indeterminateRecords: T[];
+} {
+  const okRecordIds = new Set(
+    distances.filter((d) => d.status === "ok").map((d) => d.record_id)
+  );
+  const indeterminateRecordIds = new Set(
+    distances.filter(isIndeterminateResult).map((d) => d.record_id)
+  );
+
+  const remainingToCalculate = preview.filter(
+    (r) => !okRecordIds.has(r.id) && !indeterminateRecordIds.has(r.id)
+  );
+  const indeterminateRecords = preview.filter((r) =>
+    indeterminateRecordIds.has(r.id)
+  );
+
+  return {
+    okRecordIds,
+    indeterminateRecordIds,
+    remainingToCalculate,
+    indeterminateRecords,
+  };
+}
+
+/**
+ * Formats user-facing calculation notification without falsely claiming failed rows
+ * were refunded unless confirmed by the server.
+ */
+export function formatCalculationNotification(
+  summary: BulkCalculationSummary,
+  refundErrors: string[]
+): {
+  title: string;
+  description: string;
+  variant: "default" | "destructive";
+} {
+  if (refundErrors.length > 0) {
+    return {
+      title: "Calculation completed with refund errors",
+      description: `${summary.ok} succeeded, ${summary.error} failed, ${summary.indeterminate} indeterminate. Warning: automatic credit refund failed (${refundErrors.join("; ")}).`,
+      variant: "destructive",
+    };
+  }
+
+  const parts: string[] = [`${summary.ok} succeeded`];
+  if (summary.error > 0) {
+    parts.push(`${summary.error} failed (credits refunded)`);
+  }
+  if (summary.indeterminate > 0) {
+    parts.push(`${summary.indeterminate} indeterminate (not refunded)`);
+  }
+
+  return {
+    title: "Calculation completed",
+    description: parts.join(", ") + ".",
+    variant: "default",
+  };
+}
 
 /**
  * Validates and separates records into valid address pairs and invalid pairs.
@@ -139,6 +225,7 @@ export async function executeBulkDistanceCalculation(
     resultMap.set(inv.record_id, inv);
   }
 
+  const refundErrors: string[] = [];
   let latestCreditsRemaining: number | undefined;
   let cancelled = false;
 
@@ -168,6 +255,9 @@ export async function executeBulkDistanceCalculation(
       if (typeof response.credits_remaining === "number") {
         latestCreditsRemaining = response.credits_remaining;
       }
+      if (response.refund_error) {
+        refundErrors.push(response.refund_error);
+      }
 
       const batchResults = response.results ?? [];
       for (const res of batchResults) {
@@ -180,11 +270,15 @@ export async function executeBulkDistanceCalculation(
       }
 
       processedValidCount += batchRecords.length;
-      onBatchComplete?.(batchResults, latestCreditsRemaining);
+      onBatchComplete?.(batchResults, latestCreditsRemaining, response.refund_error);
     } catch (err) {
       const errMsg = (err as Error).message || "Unknown calculation error";
       const isIndet = isNetworkTimeoutError(errMsg);
       const isConfig = isConfigurationError(errMsg);
+
+      if (/refund/i.test(errMsg)) {
+        refundErrors.push(errMsg);
+      }
 
       const fallbackResults: DistanceResult[] = batchRecords.map((r) => ({
         record_id: r.id,
@@ -208,7 +302,11 @@ export async function executeBulkDistanceCalculation(
       }
 
       processedValidCount += batchRecords.length;
-      onBatchComplete?.(fallbackResults, latestCreditsRemaining);
+      onBatchComplete?.(
+        fallbackResults,
+        latestCreditsRemaining,
+        /refund/i.test(errMsg) ? errMsg : undefined
+      );
 
       // Stop on fatal authentication, 402, or provider configuration error
       if (
@@ -232,8 +330,11 @@ export async function executeBulkDistanceCalculation(
     });
   }
 
-  // If latestCreditsRemaining is still undefined, fetch authoritative balance if provided
-  if (typeof latestCreditsRemaining !== "number" && fetchAuthoritativeCreditsFn) {
+  // If latestCreditsRemaining is still undefined OR refund errors occurred, fetch authoritative balance if provided
+  if (
+    (typeof latestCreditsRemaining !== "number" || refundErrors.length > 0) &&
+    fetchAuthoritativeCreditsFn
+  ) {
     try {
       const fetched = await fetchAuthoritativeCreditsFn();
       if (typeof fetched === "number") {
@@ -253,6 +354,7 @@ export async function executeBulkDistanceCalculation(
   return {
     results: orderedResults,
     creditsRemaining: latestCreditsRemaining,
+    refundErrors,
     cancelled,
     summary: {
       total: records.length,
