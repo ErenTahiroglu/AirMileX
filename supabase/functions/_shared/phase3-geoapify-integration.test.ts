@@ -6,8 +6,20 @@ import {
   geoapifyGeocode,
   geoapifyRoute,
   geoapifyAutocomplete,
+  httpError,
+  networkError,
+  addressNotFound,
+  createRequestPacer,
+  DEFAULT_GEOAPIFY_PACE_MS,
+  resolvePair,
   ProviderError,
 } from "./geo.ts";
+
+import {
+  buildSyncRecords,
+  STATUS_NOT_FOUND,
+} from "../../../src/lib/jobSync.ts";
+import type { DistanceResult } from "../../../src/services/distance.ts";
 
 import {
   validateBulkProviderConfig,
@@ -356,5 +368,305 @@ describe("AirMileX Phase 3: Operator-Managed Geoapify Verification Suite", () =>
 
     expect(remainingToCalculate.map((r) => r.id)).toEqual(["3"]);
     expect(indeterminateRecords.map((r) => r.id)).toEqual(["2"]);
+  });
+
+  // FIX 1: Error Classification Tests
+  describe("FIX 1: Geoapify Error Classification & Airtable Safety", () => {
+    it("classifies HTTP 401 as a non-retryable provider error", () => {
+      const err = httpError("Geoapify geocoding", 401);
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err.kind).toBe("provider");
+      expect(err.retryable).toBe(false);
+      expect(err.message).toContain("401");
+    });
+
+    it("classifies HTTP 403 as a non-retryable provider error", () => {
+      const err = httpError("Geoapify geocoding", 403);
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err.kind).toBe("provider");
+      expect(err.retryable).toBe(false);
+      expect(err.message).toContain("403");
+    });
+
+    it("classifies HTTP 429 as a retryable provider error", () => {
+      const err = httpError("Geoapify routing", 429);
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err.kind).toBe("provider");
+      expect(err.retryable).toBe(true);
+      expect(err.message).toContain("rate limit reached");
+    });
+
+    it("classifies HTTP 500 as a retryable provider error", () => {
+      const err = httpError("Geoapify geocoding", 500);
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err.kind).toBe("provider");
+      expect(err.retryable).toBe(true);
+      expect(err.message).toContain("500");
+    });
+
+    it("classifies genuine no-results as an address error", () => {
+      const err = addressNotFound("NonExistentStreet 99999");
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err.kind).toBe("address");
+      expect(err.retryable).toBe(false);
+      expect(err.message).toContain("Address not found");
+    });
+
+    it("geoapifyRoute classifies genuine no-route between valid coordinates as an address error", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            features: [
+              {
+                properties: {
+                  // No distance returned (e.g. islands without road connection)
+                  time: 0,
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+      );
+
+      await expect(
+        geoapifyRoute("test-key", [-73.98, 40.75], [144.96, -37.81])
+      ).rejects.toMatchObject({
+        kind: "address",
+        retryable: false,
+        message: expect.stringContaining("No route found"),
+      });
+    });
+
+    it("buildSyncRecords strictly excludes provider errors (401, 403, 429, 500) and NEVER writes 'Adres Bulunamadı'", () => {
+      const providerErrors: DistanceResult[] = [
+        {
+          record_id: "rec_401",
+          distance_km: 0,
+          distance_mi: 0,
+          status: "error",
+          error: "Geoapify geocoding responded with 401",
+          error_type: "provider",
+        },
+        {
+          record_id: "rec_403",
+          distance_km: 0,
+          distance_mi: 0,
+          status: "error",
+          error: "Geoapify geocoding responded with 403",
+          error_type: "provider",
+        },
+        {
+          record_id: "rec_429",
+          distance_km: 0,
+          distance_mi: 0,
+          status: "error",
+          error: "Geoapify routing rate limit reached",
+          error_type: "provider",
+        },
+        {
+          record_id: "rec_500",
+          distance_km: 0,
+          distance_mi: 0,
+          status: "error",
+          error: "Geoapify routing responded with 500",
+          error_type: "provider",
+        },
+      ];
+
+      const syncRecords = buildSyncRecords(
+        providerErrors,
+        { distance: true, cost: true, status: true, purpose: true },
+        0.67,
+        "mi"
+      );
+
+      // Provider errors must NOT be written to Airtable at all
+      expect(syncRecords).toEqual([]);
+    });
+
+    it("buildSyncRecords writes 'Adres Bulunamadı' ONLY for genuine address not found errors", () => {
+      const genuineNotFound: DistanceResult[] = [
+        {
+          record_id: "rec_nf",
+          distance_km: 0,
+          distance_mi: 0,
+          status: "error",
+          error: "Address not found: 123 Fake Street",
+          error_type: "not_found",
+        },
+      ];
+
+      const syncRecords = buildSyncRecords(
+        genuineNotFound,
+        { distance: true, cost: true, status: true, purpose: true },
+        0.67,
+        "mi"
+      );
+
+      expect(syncRecords).toEqual([
+        { id: "rec_nf", status: STATUS_NOT_FOUND },
+      ]);
+    });
+  });
+
+  // FIX 2: Pacing & Cache Tests
+  describe("FIX 2: Bounded Per-Invocation Geoapify Pacing & Cache Behavior", () => {
+    it("enforces conservative 220ms request-start interval between consecutive external calls", async () => {
+      let virtualTime = 1000;
+      const sleepCalls: number[] = [];
+
+      const pacer = createRequestPacer(
+        220,
+        async (ms) => {
+          sleepCalls.push(ms);
+          virtualTime += ms;
+        },
+        () => virtualTime
+      );
+
+      // Call 1: First request starts immediately
+      await pacer.pace();
+      expect(sleepCalls).toEqual([]);
+      expect(pacer.getLastRequestTime()).toBe(1000);
+
+      // Simulate 50ms network delay before next request is triggered
+      virtualTime += 50; // now 1050ms, elapsed since last request = 50ms
+
+      // Call 2: Must sleep (220 - 50) = 170ms
+      await pacer.pace();
+      expect(sleepCalls).toEqual([170]);
+      expect(pacer.getLastRequestTime()).toBe(1220);
+
+      // Simulate 300ms passing before Call 3
+      virtualTime += 300; // now 1520ms, elapsed = 300ms >= 220ms
+
+      // Call 3: Starts immediately without sleep
+      await pacer.pace();
+      expect(sleepCalls).toEqual([170]); // no new sleep call
+      expect(pacer.getLastRequestTime()).toBe(1520);
+    });
+
+    it("resolvePair does NOT throttle cached address lookups", async () => {
+      const geocodeCache = new Map<string, [number, number]>();
+      geocodeCache.set("100 main st, ny", [-73.985, 40.748]);
+      geocodeCache.set("200 main st, ny", [-73.99, 40.75]);
+
+      const mockPace = vi.fn();
+      const mockPacer = {
+        pace: mockPace,
+        getLastRequestTime: () => 0,
+      };
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("/routing")) {
+          return new Response(
+            JSON.stringify({
+              features: [{ properties: { distance: 1000, time: 100 } }],
+            }),
+            { status: 200 }
+          );
+        }
+        throw new Error("Geocode should not have been called for cached addresses!");
+      });
+
+      const config = { isBulk: true, operatorGeoapifyKey: "test-key" };
+      const pair = { record_id: "rec1", start: "100 Main St, NY", end: "200 Main St, NY" };
+
+      const route = await resolvePair(config, pair, geocodeCache, mockPacer);
+      expect(route.distance_m).toBe(1000);
+
+      // Pacer was called exactly ONCE for routing, ZERO times for the 2 cached geocodes
+      expect(mockPace).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolvePair does NOT throttle direct coordinate inputs", async () => {
+      const geocodeCache = new Map<string, [number, number]>();
+      const mockPace = vi.fn();
+      const mockPacer = {
+        pace: mockPace,
+        getLastRequestTime: () => 0,
+      };
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("/routing")) {
+          return new Response(
+            JSON.stringify({
+              features: [{ properties: { distance: 500, time: 60 } }],
+            }),
+            { status: 200 }
+          );
+        }
+        throw new Error("Geocode should not have been called for coordinates!");
+      });
+
+      const config = { isBulk: true, operatorGeoapifyKey: "test-key" };
+      const pair = { record_id: "rec1", start: "40.7488, -73.9851", end: "40.75, -73.99" };
+
+      const route = await resolvePair(config, pair, geocodeCache, mockPacer);
+      expect(route.distance_m).toBe(500);
+
+      // Pacer called ONCE for routing, ZERO times for coordinate geocodes
+      expect(mockPace).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolvePair paces both geocodes and route on cache misses", async () => {
+      const geocodeCache = new Map<string, [number, number]>();
+      const mockPace = vi.fn();
+      const mockPacer = {
+        pace: mockPace,
+        getLastRequestTime: () => 0,
+      };
+
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("/geocode/search")) {
+          return new Response(
+            JSON.stringify({
+              results: [{ lon: -73.98, lat: 40.75 }],
+            }),
+            { status: 200 }
+          );
+        }
+        if (url.includes("/routing")) {
+          return new Response(
+            JSON.stringify({
+              features: [{ properties: { distance: 2000, time: 200 } }],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const config = { isBulk: true, operatorGeoapifyKey: "test-key" };
+      const pair = { record_id: "rec1", start: "300 Fresh St, NY", end: "400 Fresh St, NY" };
+
+      const route = await resolvePair(config, pair, geocodeCache, mockPacer);
+      expect(route.distance_m).toBe(2000);
+
+      // Pacer called 3 times: geocode start, geocode end, route
+      expect(mockPace).toHaveBeenCalledTimes(3);
+
+      // Both addresses are now stored in geocodeCache
+      expect(geocodeCache.has("300 fresh st, ny")).toBe(true);
+      expect(geocodeCache.has("400 fresh st, ny")).toBe(true);
+    });
+
+    it("resolvePair handles 429 response as a provider error without mislabeling as invalid address", async () => {
+      const geocodeCache = new Map<string, [number, number]>();
+
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response("Rate limit exceeded", { status: 429 })
+      );
+
+      const config = { isBulk: true, operatorGeoapifyKey: "test-key" };
+      const pair = { record_id: "rec1", start: "500 Main St, NY", end: "600 Main St, NY" };
+
+      await expect(resolvePair(config, pair, geocodeCache)).rejects.toMatchObject({
+        kind: "provider",
+        retryable: true,
+        message: expect.stringContaining("rate limit reached"),
+      });
+    });
   });
 });

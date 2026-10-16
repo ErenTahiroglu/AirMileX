@@ -6,6 +6,12 @@
  * may trigger a failover to the next provider.
  */
 
+import {
+  planGeocodeProviders,
+  planRouteProviders,
+  type BulkProviderConfig,
+} from "./bulk-distance-providers.ts";
+
 export type LonLat = [number, number];
 
 export interface RouteSummary {
@@ -17,6 +23,12 @@ export interface AddressSuggestion {
   label: string;
   lat: number;
   lon: number;
+}
+
+export interface AddressPair {
+  record_id: string;
+  start: string;
+  end: string;
 }
 
 /** Error raised by a provider call; `retryable` decides whether to fail over. */
@@ -39,16 +51,30 @@ export const ADDRESS_NOT_FOUND_MESSAGE = "Address not found";
 /** HTTP status -> failover decision. */
 export const statusIsRetryable = (status: number) => status === 429 || status >= 500;
 
+/**
+ * Maps an HTTP response status from an external provider to a ProviderError.
+ * ALL HTTP failures (401, 403, 429, 500, etc.) are strictly classified as `provider` errors,
+ * NEVER as invalid user addresses. This prevents provider configuration, auth, or quota
+ * failures from incorrectly writing "Adres Bulunamadı" to user tables.
+ */
 export const httpError = (provider: string, status: number) => {
   if (status === 429) {
-    return new ProviderError(`${provider} rate limit reached. Please retry in a few moments.`, true, "provider");
+    return new ProviderError(
+      `${provider} rate limit reached. Please retry in a few moments.`,
+      true,
+      "provider"
+    );
   }
-  return new ProviderError(`${provider} responded with ${status}`, statusIsRetryable(status));
+  return new ProviderError(
+    `${provider} responded with ${status}`,
+    statusIsRetryable(status),
+    "provider"
+  );
 };
 
-/** Network failures and aborts are provider problems, so they are retryable. */
+/** Network failures and aborts are provider problems, so they are retryable provider errors. */
 export const networkError = (provider: string, err: unknown) =>
-  new ProviderError(`${provider} unreachable: ${(err as Error).message}`, true);
+  new ProviderError(`${provider} unreachable: ${(err as Error).message}`, true, "provider");
 
 export async function fetchWithTimeout(
   provider: string,
@@ -72,7 +98,7 @@ export async function fetchWithTimeout(
  * immediately on a non-retryable (user input) error.
  */
 export async function runChain<T>(attempts: Array<() => Promise<T>>): Promise<T> {
-  let lastError: unknown = new ProviderError("No provider available", true);
+  let lastError: unknown = new ProviderError("No provider available", true, "provider");
   for (const attempt of attempts) {
     try {
       return await attempt();
@@ -82,6 +108,56 @@ export async function runChain<T>(attempts: Array<() => Promise<T>>): Promise<T>
     }
   }
   throw lastError;
+}
+
+/**
+ * Default minimal pacing interval between consecutive external Geoapify requests
+ * within the same Edge Function execution context.
+ *
+ * 220 ms per request corresponds to ~4.55 requests/sec, which is safely below
+ * the published Geoapify Free tier rate limit of 5 RPS.
+ */
+export const DEFAULT_GEOAPIFY_PACE_MS = 220;
+
+export interface RequestPacer {
+  pace(): Promise<void>;
+  getLastRequestTime(): number;
+}
+
+/**
+ * Minimal per-invocation pacing helper.
+ *
+ * Enforces a bounded request-start interval between actual external API calls.
+ * Cached lookups and coordinate inputs return immediately without throttling.
+ *
+ * IMPORTANT LIMITATION:
+ * Per-invocation pacing bounds request rates strictly within a single Edge Function
+ * invocation. It does NOT globally coordinate or enforce the account-wide 5 RPS limit
+ * across concurrent Edge Function instances. Concurrent invocations share the account
+ * quota and rely on bounded HTTP 429 error handling and compensating credit refunds.
+ */
+export function createRequestPacer(
+  minIntervalMs = DEFAULT_GEOAPIFY_PACE_MS,
+  sleeper: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  nowFn: () => number = () => Date.now()
+): RequestPacer {
+  let lastRequestTime = 0;
+
+  return {
+    async pace(): Promise<void> {
+      const now = nowFn();
+      if (lastRequestTime > 0) {
+        const elapsed = now - lastRequestTime;
+        if (elapsed < minIntervalMs) {
+          await sleeper(minIntervalMs - elapsed);
+        }
+      }
+      lastRequestTime = nowFn();
+    },
+    getLastRequestTime() {
+      return lastRequestTime;
+    },
+  };
 }
 
 /** Matches "41.0082, 28.9784" style plain coordinate input. */
@@ -129,7 +205,9 @@ export async function geoapifyRoute(
   if (!res.ok) throw httpError("Geoapify routing", res.status);
   const data = await res.json();
   const props = data.features?.[0]?.properties;
-  if (typeof props?.distance !== "number") throw new ProviderError("No route found between these addresses", false);
+  if (typeof props?.distance !== "number") {
+    throw new ProviderError("No route found between these addresses", false, "address");
+  }
   return { distance_m: props.distance, duration_s: props.time ?? 0 };
 }
 
@@ -151,5 +229,63 @@ export async function geoapifyAutocomplete(
     lat: hit.lat as number,
     lon: hit.lon as number,
   }));
+}
+
+// ------------------------------------------------------------ pair resolution & attempts
+
+export function geocodeAttempts(config: BulkProviderConfig, address: string): Array<() => Promise<LonLat>> {
+  const plan = planGeocodeProviders(config);
+  const attempts: Array<() => Promise<LonLat>> = [];
+  for (const p of plan) {
+    if (p === "operator_geoapify" && config.operatorGeoapifyKey) {
+      attempts.push(() => geoapifyGeocode(config.operatorGeoapifyKey!, address));
+    }
+  }
+  return attempts;
+}
+
+export function routeAttempts(config: BulkProviderConfig, start: LonLat, end: LonLat): Array<() => Promise<RouteSummary>> {
+  const plan = planRouteProviders(config);
+  const attempts: Array<() => Promise<RouteSummary>> = [];
+  for (const p of plan) {
+    if (p === "operator_geoapify" && config.operatorGeoapifyKey) {
+      attempts.push(() => geoapifyRoute(config.operatorGeoapifyKey!, start, end));
+    }
+  }
+  return attempts;
+}
+
+/**
+ * Resolves driving distance and duration for an address pair with per-invocation request pacing.
+ *
+ * Pacing Rules:
+ * - Direct coordinate inputs parse immediately without consuming pacing delay.
+ * - Cache hits in `geocodeCache` return immediately without consuming pacing delay.
+ * - External geocode calls (cache misses) await `pacer.pace()`.
+ * - External routing calls await `pacer.pace()`.
+ */
+export async function resolvePair(
+  config: BulkProviderConfig,
+  pair: AddressPair,
+  geocodeCache: Map<string, LonLat>,
+  pacer?: RequestPacer
+): Promise<RouteSummary> {
+  const getCoordinates = async (address: string): Promise<LonLat> => {
+    const parsed = parseCoordinates(address);
+    if (parsed) return parsed;
+    const normalized = address.trim().toLowerCase();
+    if (geocodeCache.has(normalized)) {
+      return geocodeCache.get(normalized)!;
+    }
+    if (pacer) await pacer.pace();
+    const coords = await runChain(geocodeAttempts(config, address));
+    geocodeCache.set(normalized, coords);
+    return coords;
+  };
+
+  const startCoords = await getCoordinates(pair.start);
+  const endCoords = await getCoordinates(pair.end);
+  if (pacer) await pacer.pace();
+  return await runChain(routeAttempts(config, startCoords, endCoords));
 }
 

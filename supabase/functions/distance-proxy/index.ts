@@ -2,18 +2,16 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { buildCorsHeaders } from "../_shared/cors.ts";
 import {
+  DEFAULT_GEOAPIFY_PACE_MS,
   ProviderError,
-  geoapifyGeocode,
-  geoapifyRoute,
-  parseCoordinates,
-  runChain,
+  createRequestPacer,
+  resolvePair,
+  type AddressPair,
   type LonLat,
   type RouteSummary,
 } from "../_shared/geo.ts";
 
 import {
-  planGeocodeProviders,
-  planRouteProviders,
   planRefundCompensation,
   executeCreditRefund,
   validateBulkProviderConfig,
@@ -22,12 +20,6 @@ import {
 
 const SERVER_GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
 
-interface AddressPair {
-  record_id: string;
-  start: string;
-  end: string;
-}
-
 interface DistanceResult {
   record_id: string;
   distance_km: number;
@@ -35,50 +27,6 @@ interface DistanceResult {
   status: "ok" | "error";
   error?: string;
   error_type?: "not_found" | "provider";
-}
-
-function geocodeAttempts(config: BulkProviderConfig, address: string): Array<() => Promise<LonLat>> {
-  const plan = planGeocodeProviders(config);
-  const attempts: Array<() => Promise<LonLat>> = [];
-  for (const p of plan) {
-    if (p === "operator_geoapify" && config.operatorGeoapifyKey) {
-      attempts.push(() => geoapifyGeocode(config.operatorGeoapifyKey!, address));
-    }
-  }
-  return attempts;
-}
-
-function routeAttempts(config: BulkProviderConfig, start: LonLat, end: LonLat): Array<() => Promise<RouteSummary>> {
-  const plan = planRouteProviders(config);
-  const attempts: Array<() => Promise<RouteSummary>> = [];
-  for (const p of plan) {
-    if (p === "operator_geoapify" && config.operatorGeoapifyKey) {
-      attempts.push(() => geoapifyRoute(config.operatorGeoapifyKey!, start, end));
-    }
-  }
-  return attempts;
-}
-
-async function resolvePair(
-  config: BulkProviderConfig,
-  pair: AddressPair,
-  geocodeCache: Map<string, LonLat>
-): Promise<RouteSummary> {
-  const getCoordinates = async (address: string): Promise<LonLat> => {
-    const parsed = parseCoordinates(address);
-    if (parsed) return parsed;
-    const normalized = address.trim().toLowerCase();
-    if (geocodeCache.has(normalized)) {
-      return geocodeCache.get(normalized)!;
-    }
-    const coords = await runChain(geocodeAttempts(config, address));
-    geocodeCache.set(normalized, coords);
-    return coords;
-  };
-
-  const startCoords = await getCoordinates(pair.start);
-  const endCoords = await getCoordinates(pair.end);
-  return await runChain(routeAttempts(config, startCoords, endCoords));
 }
 
 /** Verifies the bearer token and returns the authenticated user id. */
@@ -170,10 +118,14 @@ serve(async (req) => {
     }
     reserved = pairs.length;
 
+    // Per-invocation pacing: enforces 220ms minimal spacing between actual Geoapify requests.
+    // NOTE: This bounds request rate within this Edge Function invocation (~4.55 RPS < 5 RPS limit),
+    // but does NOT globally coordinate across simultaneous Edge Function instances.
+    const pacer = createRequestPacer(DEFAULT_GEOAPIFY_PACE_MS);
     const geocodeCache = new Map<string, LonLat>();
     for (const pair of pairs) {
       try {
-        const route = await resolvePair(config, pair, geocodeCache);
+        const route = await resolvePair(config, pair, geocodeCache, pacer);
         results.push({
           record_id: pair.record_id,
           distance_km: route.distance_m / 1000,
