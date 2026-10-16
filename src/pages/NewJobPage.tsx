@@ -94,8 +94,10 @@ const NewJobPage = () => {
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [calculating, setCalculating] = useState(false);
+  const isCalculatingRef = useRef(false);
   const cancelCalculationRef = useRef(false);
   const [calcProgress, setCalcProgress] = useState<CalculationProgress | null>(null);
+
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress>({
     processed: 0,
@@ -431,26 +433,48 @@ const NewJobPage = () => {
     return Boolean(addr.start.trim() && addr.end.trim());
   }).length;
 
-  const handleCalculate = async () => {
-    if (!preview.length || !startCol || !endCol) return;
+  // Track completed records to avoid re-calculating or double-charging
+  const okRecordIds = new Set(distances.filter((d) => d.status === "ok").map((d) => d.record_id));
+  const indeterminateRecordIds = new Set(
+    distances
+      .filter((d) => d.status === "error" && (d.error_type === "indeterminate" || (d.error || "").toLowerCase().includes("indeterminate")))
+      .map((d) => d.record_id)
+  );
+  const remainingPreviewToCalculate = preview.filter((r) => !okRecordIds.has(r.id) && !indeterminateRecordIds.has(r.id));
+  const validRemainingCount = remainingPreviewToCalculate.filter((r) => {
+    const addr = addressesOf(r);
+    return Boolean(addr.start.trim() && addr.end.trim());
+  }).length;
 
-    if (credits < validAddressCount) {
+  const runCalculation = async (recordsToRun: PreviewRecord[], isFullRecalc = false) => {
+    if (!recordsToRun.length || !startCol || !endCol) return;
+    if (isCalculatingRef.current || calculating) return;
+
+    const validInRun = recordsToRun.filter((r) => {
+      const addr = addressesOf(r);
+      return Boolean(addr.start.trim() && addr.end.trim());
+    }).length;
+
+    if (credits < validInRun) {
       showCreditsToast(
-        `Calculation requires ${validAddressCount} credits, but you only have ${credits} credits available. Please purchase more credits to proceed.`
+        `Calculation requires ${validInRun} credits, but you only have ${credits} credits available. Please purchase more credits to proceed.`
       );
       return;
     }
 
+    isCalculatingRef.current = true;
     setCalculating(true);
     cancelCalculationRef.current = false;
     calculatedMappingRef.current = { start: startCol, end: endCol, distance: distanceCol };
-    setConfirmedSyncIds([]);
-    setFailedSyncIds([]);
-    setSyncedCount(null);
+    if (isFullRecalc) {
+      setConfirmedSyncIds([]);
+      setFailedSyncIds([]);
+      setSyncedCount(null);
+    }
     setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
 
     try {
-      const recordsToCalculate = preview.map((r) => ({
+      const recordsToCalculate = recordsToRun.map((r) => ({
         id: r.id,
         ...addressesOf(r),
       }));
@@ -472,9 +496,19 @@ const NewJobPage = () => {
         onProgress: (p) => {
           setCalcProgress(p);
         },
+        fetchAuthoritativeCreditsFn: async () => {
+          if (!user) return null;
+          const s = await getSettings(user.id);
+          return s?.credits ?? null;
+        },
       });
 
-      setDistances(res.results);
+      setDistances((prev) => {
+        const nextMap = new Map(prev.map((d) => [d.record_id, d]));
+        for (const b of res.results) nextMap.set(b.record_id, b);
+        return Array.from(nextMap.values());
+      });
+
       if (typeof res.creditsRemaining === "number") {
         setCredits(res.creditsRemaining);
       }
@@ -500,10 +534,37 @@ const NewJobPage = () => {
         toast({ title: "Error", description: msg, variant: "destructive" });
       }
     } finally {
+      isCalculatingRef.current = false;
       setCalculating(false);
       setCalcProgress(null);
+      // Synchronize with authoritative balance from DB
+      if (user) {
+        getSettings(user.id)
+          .then((s) => {
+            if (s && typeof s.credits === "number") setCredits(s.credits);
+          })
+          .catch(() => {});
+      }
     }
   };
+
+  const handleCalculate = async () => {
+    const targetRecords = okRecordIds.size > 0 ? remainingPreviewToCalculate : preview;
+    await runCalculation(targetRecords, okRecordIds.size === 0);
+  };
+
+  const handleResetAndRecalculateAll = async () => {
+    if (calculating || syncing) return;
+    const confirmed = window.confirm(
+      `Recalculating all ${validAddressCount} valid record(s) will clear existing completed results and consume up to ${validAddressCount} credits. Do you want to proceed?`
+    );
+    if (!confirmed) return;
+    setDistances([]);
+    setConfirmedSyncIds([]);
+    setFailedSyncIds([]);
+    await runCalculation(preview, true);
+  };
+
 
   const handleSync = async () => {
     // Ensure any background mapping saves have finished
@@ -720,12 +781,29 @@ const NewJobPage = () => {
                     {loadingPreview ? "Loading..." : "Load Eligible Records (up to 500)"}
                   </Button>
                   {preview.length > 0 && (
-                    <Button
-                      onClick={handleCalculate}
-                      disabled={calculating || syncing || credits < validAddressCount}
-                    >
-                      {calculating ? "Calculating..." : `Calculate Distances (${validAddressCount} credits)`}
-                    </Button>
+                    <>
+                      {validRemainingCount > 0 && (
+                        <Button
+                          onClick={handleCalculate}
+                          disabled={calculating || syncing || credits < validRemainingCount}
+                        >
+                          {calculating
+                            ? "Calculating..."
+                            : okRecordIds.size > 0
+                            ? `Continue Calculation (${validRemainingCount} remaining, ${validRemainingCount} credits)`
+                            : `Calculate Distances (${validAddressCount} credits)`}
+                        </Button>
+                      )}
+                      {okRecordIds.size > 0 && (
+                        <Button
+                          variant="outline"
+                          onClick={handleResetAndRecalculateAll}
+                          disabled={calculating || syncing || credits < validAddressCount}
+                        >
+                          Recalculate All Records ({validAddressCount} credits)
+                        </Button>
+                      )}
+                    </>
                   )}
                   {calculating && (
                     <Button
@@ -773,14 +851,17 @@ const NewJobPage = () => {
                 {preview.length > 0 && (
                   <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
                     <span>
-                      {validAddressCount} valid address pair(s) to calculate.
+                      {okRecordIds.size > 0
+                        ? `${okRecordIds.size} completed, ${validRemainingCount} valid remaining to calculate.`
+                        : `${validAddressCount} valid address pair(s) to calculate.`}
                       {preview.length - validAddressCount > 0 && ` (${preview.length - validAddressCount} invalid/empty address pair(s) excluded from credits)`}
                     </span>
-                    <span className={credits < validAddressCount ? "text-destructive font-semibold" : ""}>
+                    <span className={credits < (okRecordIds.size > 0 ? validRemainingCount : validAddressCount) ? "text-destructive font-semibold" : ""}>
                       Available balance: {credits} credits
                     </span>
                   </div>
                 )}
+
               </div>
             )}
 

@@ -40,6 +40,7 @@ export interface BulkCalculationOptions {
     pairs: AddressPair[],
     options?: { is_bulk?: boolean }
   ) => Promise<CalculateDistancesResponse>;
+  fetchAuthoritativeCreditsFn?: () => Promise<number | null>;
 }
 
 export interface BulkCalculationSummary {
@@ -57,8 +58,11 @@ export interface BulkCalculationResult {
   summary: BulkCalculationSummary;
 }
 
-const isNetworkTimeoutError = (msg: string): boolean =>
+export const isNetworkTimeoutError = (msg: string): boolean =>
   /network|fetch|timeout|abort|502|503|504|load failed|connection/i.test(msg);
+
+export const isConfigurationError = (msg: string): boolean =>
+  /not configured|configuration|operator map service|no maps api key/i.test(msg);
 
 /**
  * Validates and separates records into valid address pairs and invalid pairs.
@@ -88,12 +92,14 @@ export function filterValidAddressPairs(records: BulkRecordInput[]): {
         distance_mi: 0,
         status: "error",
         error: "Missing start or destination address",
+        error_type: "not_found",
       });
     }
   }
 
   return { valid, invalidResults };
 }
+
 
 /**
  * Orchestrates batched bulk mileage calculation:
@@ -115,7 +121,9 @@ export async function executeBulkDistanceCalculation(
     onBatchComplete,
     onProgress,
     calculateDistancesFn = calculateDistances,
+    fetchAuthoritativeCreditsFn,
   } = options;
+
 
   // 1. Separate valid address pairs from empty/invalid pairs
   const { valid, invalidResults } = filterValidAddressPairs(records);
@@ -176,6 +184,7 @@ export async function executeBulkDistanceCalculation(
     } catch (err) {
       const errMsg = (err as Error).message || "Unknown calculation error";
       const isIndet = isNetworkTimeoutError(errMsg);
+      const isConfig = isConfigurationError(errMsg);
 
       const fallbackResults: DistanceResult[] = batchRecords.map((r) => ({
         record_id: r.id,
@@ -185,6 +194,7 @@ export async function executeBulkDistanceCalculation(
         error: isIndet
           ? `Indeterminate network outcome: ${errMsg}`
           : errMsg,
+        error_type: isIndet ? "indeterminate" : isConfig ? "provider" : "network",
       }));
 
       for (const res of fallbackResults) {
@@ -200,8 +210,13 @@ export async function executeBulkDistanceCalculation(
       processedValidCount += batchRecords.length;
       onBatchComplete?.(fallbackResults, latestCreditsRemaining);
 
-      // Stop on fatal authentication or 402 error
-      if (errMsg.includes("402") || errMsg.includes("Insufficient credits") || errMsg.includes("401")) {
+      // Stop on fatal authentication, 402, or provider configuration error
+      if (
+        errMsg.includes("402") ||
+        errMsg.includes("Insufficient credits") ||
+        errMsg.includes("401") ||
+        isConfig
+      ) {
         break;
       }
     }
@@ -217,10 +232,23 @@ export async function executeBulkDistanceCalculation(
     });
   }
 
+  // If latestCreditsRemaining is still undefined, fetch authoritative balance if provided
+  if (typeof latestCreditsRemaining !== "number" && fetchAuthoritativeCreditsFn) {
+    try {
+      const fetched = await fetchAuthoritativeCreditsFn();
+      if (typeof fetched === "number") {
+        latestCreditsRemaining = fetched;
+      }
+    } catch {
+      // Ignore background fetch error
+    }
+  }
+
   // Reassemble in original record order
   const orderedResults: DistanceResult[] = records
     .map((r) => resultMap.get(r.id))
     .filter(Boolean) as DistanceResult[];
+
 
   return {
     results: orderedResults,

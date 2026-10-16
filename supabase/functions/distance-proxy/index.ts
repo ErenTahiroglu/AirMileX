@@ -21,6 +21,8 @@ import {
 import {
   planGeocodeProviders,
   planRouteProviders,
+  planRefundCompensation,
+  executeCreditRefund,
   validateBulkProviderConfig,
   type BulkProviderConfig,
 } from "../_shared/bulk-distance-providers.ts";
@@ -40,7 +42,9 @@ interface DistanceResult {
   distance_mi: number;
   status: "ok" | "error";
   error?: string;
+  error_type?: "not_found" | "provider";
 }
+
 
 /** Google distance matrix, with its own status codes mapped to our error model. */
 async function googleDistance(apiKey: string, start: string, end: string): Promise<RouteSummary> {
@@ -164,10 +168,12 @@ serve(async (req) => {
   );
 
   let reserved = 0;
+  const results: DistanceResult[] = [];
+  let pairs: AddressPair[] = [];
 
   try {
     const body = await req.json();
-    const pairs = body.pairs;
+    pairs = body.pairs;
     const isBulk = Boolean(body.is_bulk ?? body.isBulk);
 
     if (!Array.isArray(pairs) || pairs.length === 0) {
@@ -198,7 +204,7 @@ serve(async (req) => {
     }
 
     // Atomically reserve credits up-front (row-level locked UPDATE) to avoid races.
-    const { error: reserveErr } = await serviceClient.rpc("reserve_credits", {
+    const { data: reservedBalance, error: reserveErr } = await serviceClient.rpc("reserve_credits", {
       p_user_id: userId,
       p_amount: pairs.length,
     });
@@ -220,8 +226,7 @@ serve(async (req) => {
     reserved = pairs.length;
 
     const geocodeCache = new Map<string, LonLat>();
-    const results: DistanceResult[] = [];
-    for (const pair of pairs as AddressPair[]) {
+    for (const pair of pairs) {
       try {
         const route = await resolvePair(config, pair, geocodeCache);
         results.push({
@@ -231,12 +236,17 @@ serve(async (req) => {
           status: "ok",
         });
       } catch (err) {
+        const isNotFound =
+          err instanceof ProviderError
+            ? err.kind === "address"
+            : (err as Error).message.toLowerCase().includes("not found");
         results.push({
           record_id: pair.record_id,
           distance_km: 0,
           distance_mi: 0,
           status: "error",
           error: (err as Error).message,
+          error_type: isNotFound ? "not_found" : "provider",
         });
       }
     }
@@ -244,21 +254,64 @@ serve(async (req) => {
     // Compensating refund for rows that produced no usable distance.
     const failed = results.filter((r) => r.status === "error").length;
     let creditsRemaining: number | undefined;
+    let refundError: string | undefined;
+
     if (failed > 0) {
-      const { data: refunded } = await serviceClient.rpc("refund_credits", {
-        p_user_id: userId,
-        p_amount: failed,
-      });
-      if (typeof refunded === "number") creditsRemaining = refunded;
+      const refundResult = await executeCreditRefund(serviceClient, userId, failed);
+      if (!refundResult.refunded) {
+        refundError = refundResult.refundError;
+      } else {
+        creditsRemaining = refundResult.creditsRemaining;
+      }
+    } else {
+      // Fully successful batch: authoritative balance returned by reserve_credits
+      if (typeof reservedBalance === "number") {
+        creditsRemaining = reservedBalance;
+      }
+    }
+
+    // If creditsRemaining is still unknown for any reason, fetch authoritative balance from DB
+    if (typeof creditsRemaining !== "number") {
+      const { data: cur } = await serviceClient
+        .from("user_settings")
+        .select("credits")
+        .eq("id", userId)
+        .single();
+      if (cur && typeof cur.credits === "number") {
+        creditsRemaining = cur.credits;
+      }
+    }
+
+    reserved = 0;
+
+    return json({
+      results,
+      credits_remaining: creditsRemaining,
+      ...(refundError ? { refund_error: refundError } : {}),
+    });
+  } catch (err) {
+    // Compensation when the batch never completed.
+    // Ensure compensation logic cannot accidentally refund successful calculations as though the entire batch failed.
+    const succeeded = results.filter((r) => r.status === "ok").length;
+    const plan = planRefundCompensation(pairs.length || reserved, succeeded);
+    let compensationRefundError: string | undefined;
+
+    if (plan.amountToRefund > 0 && reserved > 0) {
+      const refundResult = await executeCreditRefund(serviceClient, userId, plan.amountToRefund);
+      if (!refundResult.refunded) {
+        compensationRefundError = refundResult.refundError;
+      }
     }
     reserved = 0;
 
-    return json({ results, credits_remaining: creditsRemaining });
-  } catch (err) {
-    // Full compensation when the batch never completed.
-    if (reserved > 0) {
-      await serviceClient.rpc("refund_credits", { p_user_id: userId, p_amount: reserved });
-    }
-    return json({ error: (err as Error).message }, 400);
+    return json(
+      {
+        error:
+          (err as Error).message +
+          (compensationRefundError ? ` (${compensationRefundError})` : ""),
+      },
+      400
+    );
   }
+
 });

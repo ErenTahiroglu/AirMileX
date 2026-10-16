@@ -32,4 +32,52 @@ describe("buildSyncRecords", () => {
     const [r] = buildSyncRecords([ok], { ...cols, purpose: false }, 0.76, "mi");
     expect(r.purpose).toBeUndefined();
   });
+
+  describe("Task 2: Network, provider, and indeterminate failure exclusion", () => {
+    it("regression test: network timeout cannot produce an Airtable 'Adres Bulunamadı' update and is excluded from sync", () => {
+      const networkTimeoutResult: DistanceResult = {
+        record_id: "rec_timeout",
+        distance_km: 0,
+        distance_mi: 0,
+        status: "error",
+        error: "Network timeout: request exceeded 10000ms",
+        error_type: "indeterminate",
+      };
+
+      const syncRecords = buildSyncRecords([networkTimeoutResult], cols, 0.76, "mi");
+      expect(syncRecords).toHaveLength(0);
+      expect(syncRecords.find((r) => r.status === "Adres Bulunamadı")).toBeUndefined();
+    });
+
+    it("regression test: provider 5xx and rate limits cannot produce 'Adres Bulunamadı' update", () => {
+      const providerErrorResult: DistanceResult = {
+        record_id: "rec_500",
+        distance_km: 0,
+        distance_mi: 0,
+        status: "error",
+        error: "Provider 500 internal server error",
+        error_type: "provider",
+      };
+
+      const syncRecords = buildSyncRecords([providerErrorResult], cols, 0.76, "mi");
+      expect(syncRecords).toHaveLength(0);
+    });
+
+    it("preserves genuine address-not-found rows with 'Adres Bulunamadı'", () => {
+      const genuineNotFound: DistanceResult = {
+        record_id: "rec_not_found",
+        distance_km: 0,
+        distance_mi: 0,
+        status: "error",
+        error: "Address not found: 123 Nonexistent Street Nowhere",
+        error_type: "not_found",
+      };
+
+      const syncRecords = buildSyncRecords([genuineNotFound], cols, 0.76, "mi");
+      expect(syncRecords).toEqual([
+        { id: "rec_not_found", status: "Adres Bulunamadı" },
+      ]);
+    });
+  });
 });
+
