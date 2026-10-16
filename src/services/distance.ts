@@ -12,6 +12,7 @@ export interface DistanceResult {
   distance_mi: number;
   status: "ok" | "error";
   error?: string;
+  error_type?: "not_found" | "network" | "provider" | "indeterminate";
   /** Frontend-only: AI-drafted business purpose for this row. */
   purposeText?: string;
 }
@@ -19,7 +20,9 @@ export interface DistanceResult {
 export interface CalculateDistancesResponse {
   results: DistanceResult[];
   credits_remaining?: number;
+  refund_error?: string;
 }
+
 
 export const calculateDistances = async (
   pairs: AddressPair[],

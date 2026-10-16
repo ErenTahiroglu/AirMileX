@@ -205,5 +205,63 @@ describe("AirMileX Phase 2B: Bulk Distance Calculation Orchestrator", () => {
     const indetRecord = result.results.find((r) => r.record_id === "rec_5");
     expect(indetRecord?.status).toBe("error");
     expect(indetRecord?.error).toContain("Indeterminate network outcome");
+    expect(indetRecord?.error_type).toBe("indeterminate");
+  });
+
+  it("7. Task 1: Authoritative balance: fully successful batch updates displayed credits with authoritative balance", async () => {
+    const records: BulkRecordInput[] = [
+      { id: "rec1", start: "100 Main St", end: "200 Main St" },
+    ];
+
+    let receivedCredits: number | undefined;
+
+    const mockCalculate = vi.fn().mockResolvedValue({
+      results: [{ record_id: "rec1", distance_km: 10, distance_mi: 6.2, status: "ok" as const }],
+      credits_remaining: 485, // Authoritative balance returned by server
+    });
+
+    const result = await executeBulkDistanceCalculation(records, {
+      availableCredits: 500,
+      onBatchComplete: (_batch, creditsRemaining) => {
+        receivedCredits = creditsRemaining;
+      },
+      calculateDistancesFn: mockCalculate,
+    });
+
+    // Client receives authoritative server balance 485, never blindly guessing 500 - 1
+    expect(receivedCredits).toBe(485);
+    expect(result.creditsRemaining).toBe(485);
+  });
+
+  it("8. Task 5: Provider configuration failure: stops bulk job immediately after first failure without dispatching remaining batches", async () => {
+    const tenRecords: BulkRecordInput[] = Array.from({ length: 10 }, (_, i) => ({
+      id: `rec_${i}`,
+      start: `Start Address ${i}`,
+      end: `End Address ${i}`,
+    }));
+
+    let callCount = 0;
+    const mockCalculate = vi.fn().mockImplementation(async () => {
+      callCount++;
+      // Server rejects with configuration error BEFORE reserving credits
+      throw new Error("Operator map service is not configured for bulk operations. Please contact support.");
+    });
+
+    const result = await executeBulkDistanceCalculation(tenRecords, {
+      availableCredits: 100,
+      batchSize: 5,
+      calculateDistancesFn: mockCalculate,
+    });
+
+    // Stopped immediately after batch 1; batch 2 was NEVER dispatched!
+    expect(callCount).toBe(1);
+    expect(mockCalculate).toHaveBeenCalledTimes(1);
+    expect(result.summary.error).toBe(5);
+
+    const firstResult = result.results[0];
+    expect(firstResult.status).toBe("error");
+    expect(firstResult.error).toContain("not configured");
+    expect(firstResult.error_type).toBe("provider");
   });
 });
+
