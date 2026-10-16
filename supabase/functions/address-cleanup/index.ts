@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { buildCorsHeaders } from "../_shared/cors.ts";
 import { AiError, chargeAiOps, completeJson, getCached, putCached, refundCredits, sha256 } from "../_shared/ai.ts";
-import { geoapifyGeocode, nominatimGeocode, runChain, type LonLat } from "../_shared/geo.ts";
+import { geoapifyGeocode, type LonLat } from "../_shared/geo.ts";
 import { createLovableAiGatewayRunIdFetch, getLovableAiGatewayRunId } from "./run-id.ts";
 
 const MODEL = "openai/gpt-6-astra";
@@ -69,10 +69,9 @@ interface VerifiedAddress { address: string; lat: number; lon: number }
 
 async function verify(address: string): Promise<VerifiedAddress | null> {
   const key = Deno.env.get("GEOAPIFY_API_KEY");
-  const attempts: Array<() => Promise<LonLat>> = [() => nominatimGeocode(address)];
-  if (key) attempts.push(() => geoapifyGeocode(key, address));
+  if (!key) return null;
   try {
-    const [lon, lat] = await runChain(attempts);
+    const [lon, lat] = await geoapifyGeocode(key, address);
     return { address, lat, lon };
   } catch {
     return null;

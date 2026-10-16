@@ -4,8 +4,6 @@ import { buildCorsHeaders, isTrustedRequest } from "../_shared/cors.ts";
 import {
   ProviderError,
   geoapifyAutocomplete,
-  nominatimAutocomplete,
-  orsAutocomplete,
   runChain,
   type AddressSuggestion,
 } from "../_shared/geo.ts";
@@ -15,7 +13,6 @@ import {
 } from "../_shared/autocomplete-providers.ts";
 
 const GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
-const ORS_KEY = Deno.env.get("OPENROUTESERVICE_API_KEY") ?? "";
 
 /** Suggestions are cheap but chatty: keep a tight per-IP ceiling. */
 const IP_LIMIT_PER_MINUTE = 30;
@@ -84,7 +81,7 @@ serve(async (req) => {
 
     const text = query.trim();
 
-    // Paid providers are reserved for verified signed-in users; anonymous visitors use the free provider only.
+    // Check optional authenticated user for per-user quota tracking
     let userId: string | null = null;
     const authHeader = req.headers.get("authorization") ?? "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -96,15 +93,23 @@ serve(async (req) => {
     const providers = await selectAutocompleteProviders({
       userId,
       hasGeoapifyKey: Boolean(GEOAPIFY_KEY),
-      hasOrsKey: Boolean(ORS_KEY),
-      consumePaidQuota: async () =>
-        (await consumeQuota(db, `ac-user:${userId}`, 200, 86400)) &&
-        (await consumeQuota(db, "ac-paid", PAID_LIMIT_PER_DAY, 86400)),
+      consumeQuota: async () => {
+        const userOk = userId ? await consumeQuota(db, `ac-user:${userId}`, 200, 86400) : true;
+        const globalOk = await consumeQuota(db, "ac-paid", PAID_LIMIT_PER_DAY, 86400);
+        return userOk && globalOk;
+      },
     });
+
+    if (providers.length === 0) {
+      return json({
+        suggestions: [],
+        providers: [],
+        error: !GEOAPIFY_KEY ? "Operator map service is not configured" : "Search limit reached",
+      });
+    }
+
     const runners: Record<AutocompleteProvider, () => Promise<AddressSuggestion[]>> = {
       geoapify: () => geoapifyAutocomplete(GEOAPIFY_KEY, text),
-      ors: () => orsAutocomplete(ORS_KEY, text),
-      nominatim: () => nominatimAutocomplete(text),
     };
     const attempts = providers.map((p) => runners[p]);
 
@@ -116,3 +121,4 @@ serve(async (req) => {
     return json({ suggestions: [] });
   }
 });
+

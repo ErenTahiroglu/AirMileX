@@ -53,8 +53,7 @@ const NewJobPage = () => {
   const navigate = useNavigate();
 
   const [hasPat, setHasPat] = useState(false);
-  const [hasMapsKey, setHasMapsKey] = useState(false);
-  const [provider, setProvider] = useState("google");
+  const [provider, setProvider] = useState("geoapify");
   const [credits, setCredits] = useState<number>(0);
 
   const [bases, setBases] = useState<AirtableBase[]>([]);
@@ -133,8 +132,7 @@ const NewJobPage = () => {
     getSettings(user.id).then((s) => {
       if (s) {
         setHasPat(s.has_pat);
-        setHasMapsKey(s.has_maps_key);
-        setProvider(s.maps_provider ?? "google");
+        setProvider(s.maps_provider ?? "geoapify");
         setCredits(s.credits ?? 0);
       }
     });
@@ -679,7 +677,7 @@ const NewJobPage = () => {
         {noSettings ? (
           <Card>
             <CardContent className="py-8 text-center">
-              <p className="text-muted-foreground mb-4">Configure your Airtable PAT and Maps API key first.</p>
+              <p className="text-muted-foreground mb-4">Configure your Airtable PAT in Settings first.</p>
               <Button asChild><Link to="/settings">Go to Settings</Link></Button>
             </CardContent>
           </Card>
@@ -1027,6 +1025,27 @@ const NewJobPage = () => {
                       })}
                     </TableBody>
                   </Table>
+                  <p className="text-xs text-muted-foreground text-center pt-4">
+                    Mapping and routing powered by{" "}
+                    <a
+                      href="https://www.geoapify.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline hover:text-foreground"
+                    >
+                      Geoapify
+                    </a>{" "}
+                    | ©{" "}
+                    <a
+                      href="https://www.openstreetmap.org/copyright"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline hover:text-foreground"
+                    >
+                      OpenStreetMap
+                    </a>{" "}
+                    contributors
+                  </p>
                 </CardContent>
               </Card>
             )}
@@ -1089,6 +1108,28 @@ const NewJobPage = () => {
             {statusCol
               ? "Doğrulanamayan satırlar atlanır ve Airtable'daki durum sütununa 'Adres Bulunamadı' yazılır."
               : "Doğrulanamayan satırları Airtable'da işaretlemek için bir 'Status / Log' sütunu seçin."}
+          </p>
+
+          <p className="text-xs text-muted-foreground text-center pt-1">
+            Mapping and routing powered by{" "}
+            <a
+              href="https://www.geoapify.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+            >
+              Geoapify
+            </a>{" "}
+            | ©{" "}
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+            >
+              OpenStreetMap
+            </a>{" "}
+            contributors
           </p>
 
           <DialogFooter className="gap-2 sm:justify-between">

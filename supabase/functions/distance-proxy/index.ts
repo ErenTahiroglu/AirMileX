@@ -3,17 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { buildCorsHeaders } from "../_shared/cors.ts";
 import {
   ProviderError,
-  fetchWithTimeout,
   geoapifyGeocode,
   geoapifyRoute,
-  httpError,
-  nominatimGeocode,
-  orsGeocode,
-  orsRoute,
-  osrmRoute,
   parseCoordinates,
   runChain,
-  statusIsRetryable,
   type LonLat,
   type RouteSummary,
 } from "../_shared/geo.ts";
@@ -28,7 +21,6 @@ import {
 } from "../_shared/bulk-distance-providers.ts";
 
 const SERVER_GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
-const SERVER_ORS_KEY = Deno.env.get("OPENROUTESERVICE_API_KEY") ?? "";
 
 interface AddressPair {
   record_id: string;
@@ -45,40 +37,13 @@ interface DistanceResult {
   error_type?: "not_found" | "provider";
 }
 
-
-/** Google distance matrix, with its own status codes mapped to our error model. */
-async function googleDistance(apiKey: string, start: string, end: string): Promise<RouteSummary> {
-  const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(start)}&destinations=${encodeURIComponent(end)}&key=${apiKey}`;
-  const res = await fetchWithTimeout("Google", url);
-  if (!res.ok) throw httpError("Google", res.status);
-  const data = await res.json();
-  if (data.status && statusIsRetryable(0) === false && data.status === "OVER_QUERY_LIMIT") {
-    throw new ProviderError("Google quota exceeded", true);
-  }
-  const element = data.rows?.[0]?.elements?.[0];
-  if (element?.status === "OK") {
-    return { distance_m: element.distance.value, duration_s: element.duration?.value ?? 0 };
-  }
-  // ZERO_RESULTS / NOT_FOUND are bad user input, never a reason to fail over.
-  throw new ProviderError("Address not found", false);
-}
-
-type Provider = "google" | "openrouteservice" | "geoapify";
-
-interface Keys {
-  provider: Provider;
-  userKey: string;
-}
-
 function geocodeAttempts(config: BulkProviderConfig, address: string): Array<() => Promise<LonLat>> {
   const plan = planGeocodeProviders(config);
   const attempts: Array<() => Promise<LonLat>> = [];
   for (const p of plan) {
-    if (p === "nominatim") attempts.push(() => nominatimGeocode(address));
-    else if (p === "operator_geoapify" && config.operatorGeoapifyKey) attempts.push(() => geoapifyGeocode(config.operatorGeoapifyKey!, address));
-    else if (p === "operator_ors" && config.operatorOrsKey) attempts.push(() => orsGeocode(config.operatorOrsKey!, address));
-    else if (p === "user_geoapify" && config.userKey) attempts.push(() => geoapifyGeocode(config.userKey!, address));
-    else if (p === "user_ors" && config.userKey) attempts.push(() => orsGeocode(config.userKey!, address));
+    if (p === "operator_geoapify" && config.operatorGeoapifyKey) {
+      attempts.push(() => geoapifyGeocode(config.operatorGeoapifyKey!, address));
+    }
   }
   return attempts;
 }
@@ -87,11 +52,9 @@ function routeAttempts(config: BulkProviderConfig, start: LonLat, end: LonLat): 
   const plan = planRouteProviders(config);
   const attempts: Array<() => Promise<RouteSummary>> = [];
   for (const p of plan) {
-    if (p === "osrm") attempts.push(() => osrmRoute(start, end));
-    else if (p === "operator_geoapify" && config.operatorGeoapifyKey) attempts.push(() => geoapifyRoute(config.operatorGeoapifyKey!, start, end));
-    else if (p === "operator_ors" && config.operatorOrsKey) attempts.push(() => orsRoute(config.operatorOrsKey!, start, end));
-    else if (p === "user_geoapify" && config.userKey) attempts.push(() => geoapifyRoute(config.userKey!, start, end));
-    else if (p === "user_ors" && config.userKey) attempts.push(() => orsRoute(config.userKey!, start, end));
+    if (p === "operator_geoapify" && config.operatorGeoapifyKey) {
+      attempts.push(() => geoapifyRoute(config.operatorGeoapifyKey!, start, end));
+    }
   }
   return attempts;
 }
@@ -101,15 +64,6 @@ async function resolvePair(
   pair: AddressPair,
   geocodeCache: Map<string, LonLat>
 ): Promise<RouteSummary> {
-  // User Google API key is only for single mode
-  if (!config.isBulk && config.userProvider === "google" && config.userKey) {
-    try {
-      return await googleDistance(config.userKey, pair.start, pair.end);
-    } catch (err) {
-      if (err instanceof ProviderError && !err.retryable) throw err;
-    }
-  }
-
   const getCoordinates = async (address: string): Promise<LonLat> => {
     const parsed = parseCoordinates(address);
     if (parsed) return parsed;
@@ -128,6 +82,7 @@ async function resolvePair(
 }
 
 /** Verifies the bearer token and returns the authenticated user id. */
+
 async function getAuthenticatedUserId(req: Request): Promise<string> {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) throw new Error("Unauthorized");
@@ -183,24 +138,14 @@ serve(async (req) => {
       return json({ error: "Too many rows in one batch (max 500)." }, 400);
     }
 
-    // Settings are always read for the verified user id, never a body-supplied id.
-    const { data: settings } = await serviceClient
-      .from("user_settings")
-      .select("maps_api_key, maps_provider")
-      .eq("id", userId)
-      .single();
-
     const config: BulkProviderConfig = {
       isBulk,
       operatorGeoapifyKey: SERVER_GEOAPIFY_KEY,
-      operatorOrsKey: SERVER_ORS_KEY,
-      userProvider: (settings?.maps_provider as Provider) || "geoapify",
-      userKey: (settings?.maps_api_key as string) || "",
     };
 
     const validation = validateBulkProviderConfig(config);
     if (!validation.valid) {
-      return json({ error: validation.error ?? "Invalid provider configuration" }, 400);
+      return json({ error: validation.error ?? "Operator map service is not configured" }, 400);
     }
 
     // Atomically reserve credits up-front (row-level locked UPDATE) to avoid races.

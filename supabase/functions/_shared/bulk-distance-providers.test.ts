@@ -8,88 +8,97 @@ import {
 } from "./bulk-distance-providers.ts";
 
 
-describe("AirMileX Phase 2B: Bulk Distance Provider Safety", () => {
-  it("rejects bulk calculation if operator keys are missing, even if user has no key", () => {
-    const config: BulkProviderConfig = {
+describe("AirMileX Phase 3: Operator-Managed Geoapify Distance Provider Safety", () => {
+  it("rejects calculation if operator Geoapify key is missing, for both bulk and single modes", () => {
+    const bulkConfig: BulkProviderConfig = {
       isBulk: true,
       operatorGeoapifyKey: "",
-      operatorOrsKey: "",
     };
-    const validation = validateBulkProviderConfig(config);
-    expect(validation.valid).toBe(false);
-    expect(validation.error).toContain("Operator map service is not configured for bulk operations");
+    const bulkValidation = validateBulkProviderConfig(bulkConfig);
+    expect(bulkValidation.valid).toBe(false);
+    expect(bulkValidation.error).toContain("Operator map service is not configured");
+
+    const singleConfig: BulkProviderConfig = {
+      isBulk: false,
+      operatorGeoapifyKey: "",
+    };
+    const singleValidation = validateBulkProviderConfig(singleConfig);
+    expect(singleValidation.valid).toBe(false);
+    expect(singleValidation.error).toContain("Operator map service is not configured");
   });
 
-  it("accepts bulk calculation when operator Geoapify key is configured without requiring user key", () => {
-    const config: BulkProviderConfig = {
+  it("accepts calculation when operator Geoapify key is configured without requiring user key (bulk & single)", () => {
+    const bulkConfig: BulkProviderConfig = {
       isBulk: true,
       operatorGeoapifyKey: "sec_geoapify_operator",
       userKey: "",
     };
-    const validation = validateBulkProviderConfig(config);
-    expect(validation.valid).toBe(true);
-    expect(validation.error).toBeUndefined();
-  });
+    const bulkValidation = validateBulkProviderConfig(bulkConfig);
+    expect(bulkValidation.valid).toBe(true);
+    expect(bulkValidation.error).toBeUndefined();
 
-  it("accepts bulk calculation when operator ORS key is configured without requiring user key", () => {
-    const config: BulkProviderConfig = {
-      isBulk: true,
-      operatorOrsKey: "sec_ors_operator",
+    const singleConfig: BulkProviderConfig = {
+      isBulk: false,
+      operatorGeoapifyKey: "sec_geoapify_operator",
       userKey: "",
     };
-    const validation = validateBulkProviderConfig(config);
-    expect(validation.valid).toBe(true);
-    expect(validation.error).toBeUndefined();
+    const singleValidation = validateBulkProviderConfig(singleConfig);
+    expect(singleValidation.valid).toBe(true);
+    expect(singleValidation.error).toBeUndefined();
   });
 
-  it("never includes public Nominatim in bulk geocode attempts", () => {
+  it("never includes public Nominatim in geocode attempts for either bulk or single mode", () => {
     const bulkConfig: BulkProviderConfig = {
       isBulk: true,
       operatorGeoapifyKey: "sec_geoapify",
-      operatorOrsKey: "sec_ors",
     };
-    const providers = planGeocodeProviders(bulkConfig);
-    expect(providers).not.toContain("nominatim");
-    expect(providers).toEqual(["operator_geoapify", "operator_ors"]);
-  });
+    const bulkProviders = planGeocodeProviders(bulkConfig);
+    expect(bulkProviders).not.toContain("nominatim");
+    expect(bulkProviders).toEqual(["operator_geoapify"]);
 
-  it("never includes public OSRM in bulk route attempts", () => {
-    const bulkConfig: BulkProviderConfig = {
-      isBulk: true,
-      operatorGeoapifyKey: "sec_geoapify",
-      operatorOrsKey: "sec_ors",
-    };
-    const providers = planRouteProviders(bulkConfig);
-    expect(providers).not.toContain("osrm");
-    expect(providers).toEqual(["operator_geoapify", "operator_ors"]);
-  });
-
-  it("includes public Nominatim and OSRM for non-bulk single calculations as fallback", () => {
     const singleConfig: BulkProviderConfig = {
       isBulk: false,
       operatorGeoapifyKey: "sec_geoapify",
     };
-    const geoProviders = planGeocodeProviders(singleConfig);
-    const routeProviders = planRouteProviders(singleConfig);
-    expect(geoProviders).toContain("nominatim");
-    expect(routeProviders).toContain("osrm");
+    const singleProviders = planGeocodeProviders(singleConfig);
+    expect(singleProviders).not.toContain("nominatim");
+    expect(singleProviders).toEqual(["operator_geoapify"]);
   });
 
-  it("uses operator-managed providers ONLY in bulk mode, ignoring user keys", () => {
-    const bulkConfigWithUserKey: BulkProviderConfig = {
+  it("never includes public OSRM in route attempts for either bulk or single mode", () => {
+    const bulkConfig: BulkProviderConfig = {
+      isBulk: true,
+      operatorGeoapifyKey: "sec_geoapify",
+    };
+    const bulkProviders = planRouteProviders(bulkConfig);
+    expect(bulkProviders).not.toContain("osrm");
+    expect(bulkProviders).toEqual(["operator_geoapify"]);
+
+    const singleConfig: BulkProviderConfig = {
+      isBulk: false,
+      operatorGeoapifyKey: "sec_geoapify",
+    };
+    const singleProviders = planRouteProviders(singleConfig);
+    expect(singleProviders).not.toContain("osrm");
+    expect(singleProviders).toEqual(["operator_geoapify"]);
+  });
+
+  it("uses operator Geoapify ONLY, completely ignoring user-provided keys", () => {
+    const configWithUserKey: BulkProviderConfig = {
       isBulk: true,
       operatorGeoapifyKey: "sec_geoapify_operator",
       userProvider: "geoapify",
       userKey: "user_personal_key",
     };
-    const geoProviders = planGeocodeProviders(bulkConfigWithUserKey);
-    const routeProviders = planRouteProviders(bulkConfigWithUserKey);
+    const geoProviders = planGeocodeProviders(configWithUserKey);
+    const routeProviders = planRouteProviders(configWithUserKey);
 
     expect(geoProviders).toEqual(["operator_geoapify"]);
     expect(geoProviders).not.toContain("user_geoapify");
     expect(routeProviders).toEqual(["operator_geoapify"]);
     expect(routeProviders).not.toContain("user_geoapify");
   });
+
 
   describe("Refund Integrity and Compensation", () => {
     it("never refunds successful calculations when batch aborts mid-way", () => {

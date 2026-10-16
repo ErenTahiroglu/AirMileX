@@ -1,28 +1,28 @@
 /**
  * Decides which address-suggestion providers a request may use.
- * Paid providers (Geoapify, OpenRouteService) are only for verified signed-in
- * users within quota; everyone else gets the free Nominatim provider.
- * Pure function so it can be unit-tested without network or Deno APIs.
+ * Standardizes exclusively on operator-managed Geoapify for both anonymous
+ * (landing page) and signed-in users within quota.
+ * Public Nominatim and ORS are completely removed.
  */
-export type AutocompleteProvider = "geoapify" | "ors" | "nominatim";
+export type AutocompleteProvider = "geoapify";
 
 export interface AutocompleteProviderInput {
-  userId: string | null;
+  userId?: string | null;
   hasGeoapifyKey: boolean;
-  hasOrsKey: boolean;
-  /** Lazily checks (and consumes) paid quota; only called when paid use is possible. */
-  consumePaidQuota: () => Promise<boolean>;
+  /** Lazily checks (and consumes) rate/usage quota; only called when Geoapify key is configured. */
+  consumeQuota?: () => Promise<boolean>;
 }
 
 export async function selectAutocompleteProviders(
   input: AutocompleteProviderInput
 ): Promise<AutocompleteProvider[]> {
-  const providers: AutocompleteProvider[] = [];
-  const paidPossible = Boolean(input.userId) && (input.hasGeoapifyKey || input.hasOrsKey);
-  if (paidPossible && (await input.consumePaidQuota())) {
-    if (input.hasGeoapifyKey) providers.push("geoapify");
-    if (input.hasOrsKey) providers.push("ors");
+  if (!input.hasGeoapifyKey) {
+    return [];
   }
-  providers.push("nominatim");
-  return providers;
+  if (input.consumeQuota) {
+    const allowed = await input.consumeQuota();
+    if (!allowed) return [];
+  }
+  return ["geoapify"];
 }
+

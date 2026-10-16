@@ -1,41 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 import { selectAutocompleteProviders } from "./autocomplete-providers.ts";
 
-const base = { hasGeoapifyKey: true, hasOrsKey: true };
-
-describe("selectAutocompleteProviders", () => {
-  it("anonymous searches use only Nominatim and never touch paid quota", async () => {
-    const consumePaidQuota = vi.fn(async () => true);
-    const result = await selectAutocompleteProviders({ ...base, userId: null, consumePaidQuota });
-    expect(result).toEqual(["nominatim"]);
-    expect(consumePaidQuota).not.toHaveBeenCalled();
-  });
-
-  it("signed-in searches can use paid providers first, with Nominatim as fallback", async () => {
+describe("selectAutocompleteProviders (Phase 3 Operator Geoapify)", () => {
+  it("anonymous searches use operator Geoapify within quota and never touch Nominatim", async () => {
+    const consumeQuota = vi.fn(async () => true);
     const result = await selectAutocompleteProviders({
-      ...base,
-      userId: "user-1",
-      consumePaidQuota: async () => true,
+      userId: null,
+      hasGeoapifyKey: true,
+      consumeQuota,
     });
-    expect(result).toEqual(["geoapify", "ors", "nominatim"]);
+    expect(result).toEqual(["geoapify"]);
+    expect(result).not.toContain("nominatim");
+    expect(consumeQuota).toHaveBeenCalled();
   });
 
-  it("signed-in searches fall back to Nominatim when paid quota is exhausted", async () => {
+  it("signed-in searches use operator Geoapify within quota and never touch Nominatim", async () => {
+    const consumeQuota = vi.fn(async () => true);
     const result = await selectAutocompleteProviders({
-      ...base,
       userId: "user-1",
-      consumePaidQuota: async () => false,
+      hasGeoapifyKey: true,
+      consumeQuota,
     });
-    expect(result).toEqual(["nominatim"]);
+    expect(result).toEqual(["geoapify"]);
+    expect(result).not.toContain("nominatim");
   });
 
-  it("only includes paid providers whose keys are configured", async () => {
+  it("returns empty provider list when Geoapify key is missing (never falls back to demo servers)", async () => {
     const result = await selectAutocompleteProviders({
       userId: "user-1",
       hasGeoapifyKey: false,
-      hasOrsKey: true,
-      consumePaidQuota: async () => true,
     });
-    expect(result).toEqual(["ors", "nominatim"]);
+    expect(result).toEqual([]);
+    expect(result).not.toContain("nominatim");
+  });
+
+  it("returns empty provider list when quota is exhausted (never falls back to demo servers)", async () => {
+    const consumeQuota = vi.fn(async () => false);
+    const result = await selectAutocompleteProviders({
+      userId: "user-1",
+      hasGeoapifyKey: true,
+      consumeQuota,
+    });
+    expect(result).toEqual([]);
+    expect(result).not.toContain("nominatim");
   });
 });
+

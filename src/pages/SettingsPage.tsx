@@ -29,8 +29,6 @@ const SettingsPage = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [pat, setPat] = useState("");
-  const [mapsKey, setMapsKey] = useState("");
-  const [provider, setProvider] = useState<string>("google");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -41,15 +39,12 @@ const SettingsPage = () => {
   const [sendingCode, setSendingCode] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [hasPat, setHasPat] = useState(false);
-  const [hasMapsKey, setHasMapsKey] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     getSettings(user.id).then((s) => {
       if (s) {
-        setProvider(s.maps_provider ?? "google");
         setHasPat(s.has_pat);
-        setHasMapsKey(s.has_maps_key);
       }
     });
   }, [user]);
@@ -61,22 +56,16 @@ const SettingsPage = () => {
       const payload: {
         id: string;
         airtable_pat?: string | null;
-        maps_api_key?: string | null;
-        maps_provider?: string | null;
       } = {
         id: user.id,
-        maps_provider: provider,
       };
 
       // Only send keys if user typed a new value
       if (pat) payload.airtable_pat = pat;
-      if (mapsKey) payload.maps_api_key = mapsKey;
 
       await upsertSettings(payload);
       if (pat) setHasPat(true);
-      if (mapsKey) setHasMapsKey(true);
       setPat("");
-      setMapsKey("");
       toast({ title: "Saved", description: "Settings updated." });
     } catch (err: unknown) {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
@@ -235,34 +224,36 @@ const SettingsPage = () => {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Maps Provider</CardTitle>
+            <CardTitle className="text-base">Maps Integration</CardTitle>
+            <CardDescription>
+              Driving distance calculations are operator-managed and included with your AirMileX account credits. Powered by{" "}
+              <a
+                href="https://www.geoapify.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-foreground"
+              >
+                Geoapify
+              </a>{" "}
+              | ©{" "}
+              <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-foreground"
+              >
+                OpenStreetMap
+              </a>{" "}
+              contributors.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>Provider</Label>
-              <Select value={provider} onValueChange={setProvider}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="google">Google Maps</SelectItem>
-                  <SelectItem value="openrouteservice">OpenRouteService</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="mapsKey">API Key</Label>
-                {hasMapsKey && <Badge variant="outline" className="text-xs border-success text-success-foreground">Saved (Hidden)</Badge>}
-              </div>
-              <Input
-                id="mapsKey"
-                type="password"
-                value={mapsKey}
-                onChange={(e) => setMapsKey(e.target.value)}
-                placeholder={hasMapsKey ? "Enter new key to replace" : "Your API key"}
-              />
-            </div>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              No personal map API key required. Calculations run automatically using operator-managed routing services.
+            </p>
           </CardContent>
         </Card>
+
 
         <Button onClick={handleSave} disabled={saving} className="w-full">
           {saving ? "Saving..." : "Save Settings"}

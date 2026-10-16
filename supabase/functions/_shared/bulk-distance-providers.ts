@@ -16,71 +16,34 @@ export function validateBulkProviderConfig(config: BulkProviderConfig): {
   valid: boolean;
   error?: string;
 } {
-  if (config.isBulk) {
-    const hasOperatorKey = Boolean(config.operatorGeoapifyKey || config.operatorOrsKey);
-    if (!hasOperatorKey) {
-      return {
-        valid: false,
-        error: "Operator map service is not configured for bulk operations. Please contact support.",
-      };
-    }
-  } else {
-    const hasKey = Boolean(config.userKey || config.operatorGeoapifyKey || config.operatorOrsKey);
-    if (!hasKey) {
-      return {
-        valid: false,
-        error: "No Maps API key configured. Please add it in Settings.",
-      };
-    }
+  const hasOperatorKey = Boolean(config.operatorGeoapifyKey);
+  if (!hasOperatorKey) {
+    return {
+      valid: false,
+      error: "Operator map service is not configured. Please contact support.",
+    };
   }
   return { valid: true };
 }
 
-export type GeocodeProviderType =
-  | "nominatim"
-  | "operator_geoapify"
-  | "operator_ors"
-  | "user_geoapify"
-  | "user_ors";
+export type GeocodeProviderType = "operator_geoapify";
 
 export function planGeocodeProviders(config: BulkProviderConfig): GeocodeProviderType[] {
-  const plan: GeocodeProviderType[] = [];
-  if (!config.isBulk) {
-    plan.push("nominatim");
-    if (config.operatorGeoapifyKey) plan.push("operator_geoapify");
-    if (config.operatorOrsKey) plan.push("operator_ors");
-    if (config.userProvider === "geoapify" && config.userKey) plan.push("user_geoapify");
-    if (config.userProvider === "openrouteservice" && config.userKey) plan.push("user_ors");
-  } else {
-    // Bulk mode: operator-managed providers ONLY
-    if (config.operatorGeoapifyKey) plan.push("operator_geoapify");
-    if (config.operatorOrsKey) plan.push("operator_ors");
+  if (config.operatorGeoapifyKey) {
+    return ["operator_geoapify"];
   }
-  return plan;
+  return [];
 }
 
-export type RouteProviderType =
-  | "osrm"
-  | "operator_geoapify"
-  | "operator_ors"
-  | "user_geoapify"
-  | "user_ors";
+export type RouteProviderType = "operator_geoapify";
 
 export function planRouteProviders(config: BulkProviderConfig): RouteProviderType[] {
-  const plan: RouteProviderType[] = [];
-  if (!config.isBulk) {
-    plan.push("osrm");
-    if (config.operatorGeoapifyKey) plan.push("operator_geoapify");
-    if (config.operatorOrsKey) plan.push("operator_ors");
-    if (config.userProvider === "geoapify" && config.userKey) plan.push("user_geoapify");
-    if (config.userProvider === "openrouteservice" && config.userKey) plan.push("user_ors");
-  } else {
-    // Bulk mode: operator-managed providers ONLY
-    if (config.operatorGeoapifyKey) plan.push("operator_geoapify");
-    if (config.operatorOrsKey) plan.push("operator_ors");
+  if (config.operatorGeoapifyKey) {
+    return ["operator_geoapify"];
   }
-  return plan;
+  return [];
 }
+
 
 export interface RefundCompensationPlan {
   totalPairs: number;

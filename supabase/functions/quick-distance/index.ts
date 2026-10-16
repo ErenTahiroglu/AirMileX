@@ -3,20 +3,19 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { buildCorsHeaders, isTrustedRequest } from "../_shared/cors.ts";
 import {
   ProviderError,
-  nominatimGeocode,
-  osrmRoute,
+  geoapifyGeocode,
+  geoapifyRoute,
   parseCoordinates,
-  runChain,
   type LonLat,
   type RouteSummary,
 } from "../_shared/geo.ts";
+import {
+  QUICK_DISTANCE_IP_LIMIT_PER_MINUTE,
+  QUICK_DISTANCE_IP_LIMIT_PER_HOUR,
+  QUICK_DISTANCE_GLOBAL_LIMIT_PER_DAY,
+} from "../_shared/quick-distance-providers.ts";
 
-// Public endpoint: free hard-coded providers only (see _shared/quick-distance-providers.ts).
-
-/** Abuse controls for this intentionally public endpoint. */
-const IP_LIMIT_PER_MINUTE = 5;
-const IP_LIMIT_PER_HOUR = 20;
-const GLOBAL_LIMIT_PER_DAY = 2000;
+const GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
 
 type Db = ReturnType<typeof createClient>;
 
@@ -48,7 +47,7 @@ async function hashIp(ip: string): Promise<string> {
     .join("");
 }
 
-/** Cache -> Nominatim. Stops early on bad addresses. */
+/** Cache -> Operator Geoapify. Stops early on bad addresses. */
 async function resolveAddress(db: Db, address: string): Promise<LonLat> {
   const direct = parseCoordinates(address);
   if (direct) return direct;
@@ -61,9 +60,11 @@ async function resolveAddress(db: Db, address: string): Promise<LonLat> {
     .maybeSingle();
   if (cached) return [cached.lon as number, cached.lat as number];
 
-  const attempts: Array<() => Promise<LonLat>> = [() => nominatimGeocode(address)];
+  if (!GEOAPIFY_KEY) {
+    throw new ProviderError("Distance service is not configured.", false, "provider");
+  }
 
-  const coords = await runChain(attempts);
+  const coords = await geoapifyGeocode(GEOAPIFY_KEY, address);
 
   await db
     .from("geocode_cache")
@@ -87,9 +88,11 @@ async function resolveRoute(
     return { distance_m: cached.distance_m as number, duration_s: cached.duration_s as number };
   }
 
-  const attempts: Array<() => Promise<RouteSummary>> = [() => osrmRoute(start, end)];
+  if (!GEOAPIFY_KEY) {
+    throw new ProviderError("Distance service is not configured.", false, "provider");
+  }
 
-  const route = await runChain(attempts);
+  const route = await geoapifyRoute(GEOAPIFY_KEY, start, end);
 
   await db.from("route_cache").upsert({
     route_key: key,
@@ -99,6 +102,7 @@ async function resolveRoute(
 
   return route;
 }
+
 
 serve(async (req) => {
   const corsHeaders = buildCorsHeaders(req);
@@ -138,9 +142,9 @@ serve(async (req) => {
     const ipHash = await hashIp(clientIp);
 
     const [perMinute, perHour, globalAllowed] = await Promise.all([
-      consumeQuota(db, `ip-min:${ipHash}`, IP_LIMIT_PER_MINUTE, 60),
-      consumeQuota(db, `ip:${ipHash}`, IP_LIMIT_PER_HOUR, 3600),
-      consumeQuota(db, "global", GLOBAL_LIMIT_PER_DAY, 86400),
+      consumeQuota(db, `ip-min:${ipHash}`, QUICK_DISTANCE_IP_LIMIT_PER_MINUTE, 60),
+      consumeQuota(db, `ip:${ipHash}`, QUICK_DISTANCE_IP_LIMIT_PER_HOUR, 3600),
+      consumeQuota(db, "global", QUICK_DISTANCE_GLOBAL_LIMIT_PER_DAY, 86400),
     ]);
 
     if (!perMinute) {

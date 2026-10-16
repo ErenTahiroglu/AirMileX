@@ -112,7 +112,7 @@ const AuthPage = () => {
               </div>
               <div className="flex items-start gap-3">
                 <Zap className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                <p className="text-sm text-muted-foreground">Batch-calculate distances using Google Maps or OpenRouteService.</p>
+                <p className="text-sm text-muted-foreground">Batch-calculate driving distances automatically with built-in mapping.</p>
               </div>
               <div className="flex items-start gap-3">
                 <FileText className="mt-0.5 h-5 w-5 shrink-0 text-primary" />

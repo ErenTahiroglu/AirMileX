@@ -165,6 +165,27 @@ const QuickMileageCalculator = ({ prefill, hideUpsell = false }: Props) => {
             )}
           </div>
         )}
+        <p className="mt-4 text-xs text-muted-foreground text-center">
+          Powered by{" "}
+          <a
+            href="https://www.geoapify.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            Geoapify
+          </a>{" "}
+          | ©{" "}
+          <a
+            href="https://www.openstreetmap.org/copyright"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            OpenStreetMap
+          </a>{" "}
+          contributors
+        </p>
       </CardContent>
     </Card>
   );
