@@ -62,7 +62,7 @@ const PricingPage = () => {
     <div className="flex min-h-screen flex-col bg-background">
       <Seo
         title="Pricing | AirMileX — 500 Mileage Credits for $9"
-        description="Simple, transparent pricing. Start with 50 free credits on signup. Buy 500 mileage credits for a one-time $9. Airtable integration, operator-managed map routing."
+        description="Simple, transparent pricing. Start with 50 free credits on signup. 500 mileage credits for a one-time $9 when paid checkout opens. Airtable integration, operator-managed map routing."
         path="/pricing"
         jsonLd={{
           "@context": "https://schema.org",

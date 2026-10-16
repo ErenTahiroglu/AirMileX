@@ -69,17 +69,20 @@ describe("Phase 4 Freemium Onboarding, Conversion UX & Security", () => {
       expect(pricingSrc).toContain("system refund rules");
     });
 
-    it("verifies AuthPage does not make unsupported IRS-compliant claims", () => {
+    it("verifies AuthPage does not make unsupported IRS-compliant claims or suggest immediate paid checkout", () => {
       const authSrc = fs.readFileSync(path.resolve(__dirname, "../pages/AuthPage.tsx"), "utf-8");
       expect(authSrc).not.toContain("IRS-compliant");
+      expect(authSrc).not.toContain("buy 500 additional credits");
       expect(authSrc).toContain("50 Free Mileage Credits on Signup");
       expect(authSrc).toContain("detailed mileage logs");
+      expect(authSrc).toContain("500 additional credits will be available for $9 as paid checkout opens");
     });
 
     it("verifies NewJobPage does not falsely label total remaining balance as free credits", () => {
       const newJobSrc = fs.readFileSync(path.resolve(__dirname, "../pages/NewJobPage.tsx"), "utf-8");
       expect(newJobSrc).not.toContain("{credits} free mileage credits");
       expect(newJobSrc).toContain("{credits} mileage credits");
+      expect(newJobSrc).not.toContain("Buy 500 Credits");
     });
   });
 

@@ -870,7 +870,7 @@ const NewJobPage = () => {
                         This calculation requires <strong>{distances.length > 0 ? validRemainingCount : validAddressCount} credits</strong>, but your available balance is <strong>{credits} credits</strong>.
                       </span>
                       <Button size="sm" variant="destructive" asChild className="shrink-0">
-                        <Link to="/pricing">Buy 500 Credits ($9)</Link>
+                        <Link to="/pricing">View Pricing (500 for $9)</Link>
                       </Button>
                     </AlertDescription>
                   </Alert>

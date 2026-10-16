@@ -86,7 +86,7 @@ const Dashboard = () => {
                     size="sm"
                     asChild
                   >
-                    <Link to="/pricing">Buy 500 Credits — $9</Link>
+                    <Link to="/pricing">Credit Pricing (500 for $9)</Link>
                   </Button>
                 </>
               )}

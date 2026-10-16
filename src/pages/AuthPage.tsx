@@ -122,7 +122,7 @@ const AuthPage = () => {
               </div>
               <div className="flex items-start gap-3">
                 <FileText className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                <p className="text-sm text-muted-foreground">Start with 50 free mileage credits; buy 500 additional credits for $9 whenever you need more.</p>
+                <p className="text-sm text-muted-foreground">Start with 50 free mileage credits; 500 additional credits will be available for $9 as paid checkout opens.</p>
               </div>
             </div>
 
