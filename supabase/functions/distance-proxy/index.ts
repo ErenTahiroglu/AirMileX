@@ -18,6 +18,13 @@ import {
   type RouteSummary,
 } from "../_shared/geo.ts";
 
+import {
+  planGeocodeProviders,
+  planRouteProviders,
+  validateBulkProviderConfig,
+  type BulkProviderConfig,
+} from "../_shared/bulk-distance-providers.ts";
+
 const SERVER_GEOAPIFY_KEY = Deno.env.get("GEOAPIFY_API_KEY") ?? "";
 const SERVER_ORS_KEY = Deno.env.get("OPENROUTESERVICE_API_KEY") ?? "";
 
@@ -59,46 +66,61 @@ interface Keys {
   userKey: string;
 }
 
-/** Free services first, then the operator's keyed providers, then the user's own key. */
-function geocodeAttempts(keys: Keys, address: string): Array<() => Promise<LonLat>> {
-  const attempts: Array<() => Promise<LonLat>> = [() => nominatimGeocode(address)];
-  if (SERVER_GEOAPIFY_KEY) attempts.push(() => geoapifyGeocode(SERVER_GEOAPIFY_KEY, address));
-  if (SERVER_ORS_KEY) attempts.push(() => orsGeocode(SERVER_ORS_KEY, address));
-  if (keys.provider === "geoapify" && keys.userKey) {
-    attempts.push(() => geoapifyGeocode(keys.userKey, address));
-  }
-  if (keys.provider === "openrouteservice" && keys.userKey) {
-    attempts.push(() => orsGeocode(keys.userKey, address));
-  }
-  return attempts;
-}
-
-function routeAttempts(keys: Keys, start: LonLat, end: LonLat): Array<() => Promise<RouteSummary>> {
-  const attempts: Array<() => Promise<RouteSummary>> = [() => osrmRoute(start, end)];
-  if (SERVER_GEOAPIFY_KEY) attempts.push(() => geoapifyRoute(SERVER_GEOAPIFY_KEY, start, end));
-  if (SERVER_ORS_KEY) attempts.push(() => orsRoute(SERVER_ORS_KEY, start, end));
-  if (keys.provider === "geoapify" && keys.userKey) {
-    attempts.push(() => geoapifyRoute(keys.userKey, start, end));
-  }
-  if (keys.provider === "openrouteservice" && keys.userKey) {
-    attempts.push(() => orsRoute(keys.userKey, start, end));
+function geocodeAttempts(config: BulkProviderConfig, address: string): Array<() => Promise<LonLat>> {
+  const plan = planGeocodeProviders(config);
+  const attempts: Array<() => Promise<LonLat>> = [];
+  for (const p of plan) {
+    if (p === "nominatim") attempts.push(() => nominatimGeocode(address));
+    else if (p === "operator_geoapify" && config.operatorGeoapifyKey) attempts.push(() => geoapifyGeocode(config.operatorGeoapifyKey!, address));
+    else if (p === "operator_ors" && config.operatorOrsKey) attempts.push(() => orsGeocode(config.operatorOrsKey!, address));
+    else if (p === "user_geoapify" && config.userKey) attempts.push(() => geoapifyGeocode(config.userKey!, address));
+    else if (p === "user_ors" && config.userKey) attempts.push(() => orsGeocode(config.userKey!, address));
   }
   return attempts;
 }
 
-async function resolvePair(keys: Keys, pair: AddressPair): Promise<RouteSummary> {
-  if (keys.provider === "google" && keys.userKey) {
+function routeAttempts(config: BulkProviderConfig, start: LonLat, end: LonLat): Array<() => Promise<RouteSummary>> {
+  const plan = planRouteProviders(config);
+  const attempts: Array<() => Promise<RouteSummary>> = [];
+  for (const p of plan) {
+    if (p === "osrm") attempts.push(() => osrmRoute(start, end));
+    else if (p === "operator_geoapify" && config.operatorGeoapifyKey) attempts.push(() => geoapifyRoute(config.operatorGeoapifyKey!, start, end));
+    else if (p === "operator_ors" && config.operatorOrsKey) attempts.push(() => orsRoute(config.operatorOrsKey!, start, end));
+    else if (p === "user_geoapify" && config.userKey) attempts.push(() => geoapifyRoute(config.userKey!, start, end));
+    else if (p === "user_ors" && config.userKey) attempts.push(() => orsRoute(config.userKey!, start, end));
+  }
+  return attempts;
+}
+
+async function resolvePair(
+  config: BulkProviderConfig,
+  pair: AddressPair,
+  geocodeCache: Map<string, LonLat>
+): Promise<RouteSummary> {
+  // User Google API key is only for single mode
+  if (!config.isBulk && config.userProvider === "google" && config.userKey) {
     try {
-      return await googleDistance(keys.userKey, pair.start, pair.end);
+      return await googleDistance(config.userKey, pair.start, pair.end);
     } catch (err) {
-      // Only provider trouble may fall through to the open/keyed chain.
       if (err instanceof ProviderError && !err.retryable) throw err;
     }
   }
 
-  const startCoords = parseCoordinates(pair.start) ?? (await runChain(geocodeAttempts(keys, pair.start)));
-  const endCoords = parseCoordinates(pair.end) ?? (await runChain(geocodeAttempts(keys, pair.end)));
-  return await runChain(routeAttempts(keys, startCoords, endCoords));
+  const getCoordinates = async (address: string): Promise<LonLat> => {
+    const parsed = parseCoordinates(address);
+    if (parsed) return parsed;
+    const normalized = address.trim().toLowerCase();
+    if (geocodeCache.has(normalized)) {
+      return geocodeCache.get(normalized)!;
+    }
+    const coords = await runChain(geocodeAttempts(config, address));
+    geocodeCache.set(normalized, coords);
+    return coords;
+  };
+
+  const startCoords = await getCoordinates(pair.start);
+  const endCoords = await getCoordinates(pair.end);
+  return await runChain(routeAttempts(config, startCoords, endCoords));
 }
 
 /** Verifies the bearer token and returns the authenticated user id. */
@@ -144,7 +166,10 @@ serve(async (req) => {
   let reserved = 0;
 
   try {
-    const { pairs } = await req.json();
+    const body = await req.json();
+    const pairs = body.pairs;
+    const isBulk = Boolean(body.is_bulk ?? body.isBulk);
+
     if (!Array.isArray(pairs) || pairs.length === 0) {
       return json({ error: "Missing pairs" }, 400);
     }
@@ -159,13 +184,17 @@ serve(async (req) => {
       .eq("id", userId)
       .single();
 
-    const keys: Keys = {
-      provider: (settings?.maps_provider as Provider) || "geoapify",
+    const config: BulkProviderConfig = {
+      isBulk,
+      operatorGeoapifyKey: SERVER_GEOAPIFY_KEY,
+      operatorOrsKey: SERVER_ORS_KEY,
+      userProvider: (settings?.maps_provider as Provider) || "geoapify",
       userKey: (settings?.maps_api_key as string) || "",
     };
 
-    if (!keys.userKey && !SERVER_GEOAPIFY_KEY && !SERVER_ORS_KEY) {
-      return json({ error: "No Maps API key configured. Please add it in Settings." }, 400);
+    const validation = validateBulkProviderConfig(config);
+    if (!validation.valid) {
+      return json({ error: validation.error ?? "Invalid provider configuration" }, 400);
     }
 
     // Atomically reserve credits up-front (row-level locked UPDATE) to avoid races.
@@ -190,10 +219,11 @@ serve(async (req) => {
     }
     reserved = pairs.length;
 
+    const geocodeCache = new Map<string, LonLat>();
     const results: DistanceResult[] = [];
     for (const pair of pairs as AddressPair[]) {
       try {
-        const route = await resolvePair(keys, pair);
+        const route = await resolvePair(config, pair, geocodeCache);
         results.push({
           record_id: pair.record_id,
           distance_km: route.distance_m / 1000,

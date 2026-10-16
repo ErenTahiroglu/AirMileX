@@ -140,17 +140,7 @@ serve(async (req) => {
           throw new AirtableInputError("Missing params");
         }
 
-        // 1. Fetch live table metadata to verify table and resolve field names
-        const meta = await airtableFetch(`${AIRTABLE_META}/bases/${encodeURIComponent(baseId)}/tables`, pat) as {
-          tables?: Array<{ id: string; fields: Array<{ id: string; name: string }> }>;
-        };
-        const table = meta.tables?.find((t) => t.id === tableId);
-        if (!table) throw new AirtableInputError("Table not found in this base.");
-
-        // 2. Build blank distance formula using verified distance field
-        const formula = buildBlankFieldFormula(distanceFieldId, table.fields);
-
-        // 3. Resolve caller's saved column mapping for this table to project only mapped fields
+        // 1. Resolve caller's saved column mapping for this table first
         const { data: mapping } = await getServiceClient()
           .from("saved_mappings")
           .select("table_id, start_col_id, end_col_id, distance_col_id, cost_col_id, status_col_id, notes_col_id, purpose_col_id")
@@ -158,25 +148,46 @@ serve(async (req) => {
           .eq("table_id", tableId)
           .maybeSingle();
 
-        const mappedColIds = new Set<string>();
-        if (mapping) {
-          if (mapping.start_col_id) mappedColIds.add(mapping.start_col_id);
-          if (mapping.end_col_id) mappedColIds.add(mapping.end_col_id);
-          if (mapping.distance_col_id) mappedColIds.add(mapping.distance_col_id);
-          if (mapping.cost_col_id) mappedColIds.add(mapping.cost_col_id);
-          if (mapping.status_col_id) mappedColIds.add(mapping.status_col_id);
-          if (mapping.notes_col_id) mappedColIds.add(mapping.notes_col_id);
-          if (mapping.purpose_col_id) mappedColIds.add(mapping.purpose_col_id);
-        }
-        if (typeof distanceFieldId === "string" && distanceFieldId) {
-          mappedColIds.add(distanceFieldId);
+        if (!mapping || !mapping.start_col_id || !mapping.end_col_id || !mapping.distance_col_id) {
+          throw new AirtableInputError("No complete column mapping configured for this table. Please save mapping first.");
         }
 
+        if (distanceFieldId && distanceFieldId !== mapping.distance_col_id) {
+          throw new AirtableInputError("distanceFieldId does not match saved mapping for this table.");
+        }
+
+        const effectiveDistanceColId = mapping.distance_col_id;
+
+        // 2. Fetch live table metadata to verify table and resolve field names
+        const meta = await airtableFetch(`${AIRTABLE_META}/bases/${encodeURIComponent(baseId)}/tables`, pat) as {
+          tables?: Array<{ id: string; fields: Array<{ id: string; name: string }> }>;
+        };
+        const table = meta.tables?.find((t) => t.id === tableId);
+        if (!table) throw new AirtableInputError("Table not found in this base.");
+
+        // 3. Verify required mapped fields exist in the live schema
+        const tableFieldMap = new Map<string, string>(table.fields.map((f) => [f.id, f.name]));
+        if (!tableFieldMap.has(mapping.start_col_id) || !tableFieldMap.has(mapping.end_col_id) || !tableFieldMap.has(effectiveDistanceColId)) {
+          throw new AirtableInputError("Mapped required fields not found in Airtable table schema.");
+        }
+
+        // Build blank distance formula using verified distance field
+        const formula = buildBlankFieldFormula(effectiveDistanceColId, table.fields);
+
+        const mappedColIds = [
+          mapping.start_col_id,
+          mapping.end_col_id,
+          effectiveDistanceColId,
+          mapping.cost_col_id,
+          mapping.status_col_id,
+          mapping.notes_col_id,
+          mapping.purpose_col_id,
+        ].filter(Boolean) as string[];
+
         const allowedFieldNames = new Set<string>();
-        for (const f of table.fields) {
-          if (mappedColIds.has(f.id)) {
-            allowedFieldNames.add(f.name);
-          }
+        for (const colId of mappedColIds) {
+          const name = tableFieldMap.get(colId);
+          if (name) allowedFieldNames.add(name);
         }
 
         const maxRecordsToFetch = Math.min(
@@ -184,10 +195,10 @@ serve(async (req) => {
           500
         );
 
-        // 4. Bounded pagination up to 500 records
+        // 4. Bounded pagination up to 500 records with pageSize propagation
         const paginated = await paginateAirtableRecords(
-          async (offset) => {
-            let pageUrl = `${AIRTABLE_API}/${encodeURIComponent(baseId)}/${encodeURIComponent(tableId)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`;
+          async (offset, pageSize) => {
+            let pageUrl = `${AIRTABLE_API}/${encodeURIComponent(baseId)}/${encodeURIComponent(tableId)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=${pageSize ?? 100}`;
             if (offset) {
               pageUrl += `&offset=${encodeURIComponent(offset)}`;
             }
@@ -196,10 +207,8 @@ serve(async (req) => {
           { maxRecords: maxRecordsToFetch }
         );
 
-        // 5. Whitelist fields preserving field-name-keyed structure
-        const projectedRecords = allowedFieldNames.size > 0
-          ? projectMappedFields(paginated.records, allowedFieldNames)
-          : paginated.records;
+        // 5. Whitelist fields preserving field-name-keyed structure (always projected against allowedFieldNames)
+        const projectedRecords = projectMappedFields(paginated.records, allowedFieldNames);
 
         result = {
           records: projectedRecords,

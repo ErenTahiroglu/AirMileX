@@ -7,8 +7,10 @@ import { buildSyncRecords } from "@/lib/jobSync";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getSettings } from "@/services/settings";
-import { listBases, listTables, readRecords, type SyncProgress } from "@/services/airtable";
+import { listBases, listTables, readRecords, readEligibleRecords, type SyncProgress } from "@/services/airtable";
 import { calculateDistances, AddressPair, DistanceResult } from "@/services/distance";
+import { executeBulkDistanceCalculation, type CalculationProgress } from "@/lib/bulkCalculation";
+import { Badge } from "@/components/ui/badge";
 import {
   getMapping,
   upsertMapping,
@@ -48,6 +50,7 @@ const NewJobPage = () => {
   const [hasPat, setHasPat] = useState(false);
   const [hasMapsKey, setHasMapsKey] = useState(false);
   const [provider, setProvider] = useState("google");
+  const [credits, setCredits] = useState<number>(0);
 
   const [bases, setBases] = useState<AirtableBase[]>([]);
   const [tables, setTables] = useState<AirtableTable[]>([]);
@@ -76,6 +79,12 @@ const NewJobPage = () => {
   const [confirmedSyncIds, setConfirmedSyncIds] = useState<string[]>([]);
 
   const [preview, setPreview] = useState<PreviewRecord[]>([]);
+  const [retrievalMeta, setRetrievalMeta] = useState<{
+    isFullLoad: boolean;
+    limitReached: boolean;
+    exhausted: boolean;
+    total: number;
+  } | null>(null);
   const [distances, setDistances] = useState<DistanceResult[]>([]);
   const [purposes, setPurposes] = useState<Record<string, string>>({});
   const [overrides, setOverrides] = useState<Record<string, { start: string; end: string }>>({});
@@ -85,6 +94,8 @@ const NewJobPage = () => {
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [calculating, setCalculating] = useState(false);
+  const cancelCalculationRef = useRef(false);
+  const [calcProgress, setCalcProgress] = useState<CalculationProgress | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress>({
     processed: 0,
@@ -117,6 +128,7 @@ const NewJobPage = () => {
         setHasPat(s.has_pat);
         setHasMapsKey(s.has_maps_key);
         setProvider(s.maps_provider ?? "google");
+        setCredits(s.credits ?? 0);
       }
     });
   }, [user]);
@@ -138,6 +150,7 @@ const NewJobPage = () => {
     setSelectedTable("");
     setFields([]);
     setPreview([]);
+    setRetrievalMeta(null);
     setDistances([]);
     setPurposes({});
     setOverrides({});
@@ -163,7 +176,7 @@ const NewJobPage = () => {
     setStartCol(""); setEndCol(""); setDistanceCol(""); setCostCol(""); setStatusCol("");
     setNotesCol(""); setPurposeCol("");
     setRatePerUnit(DEFAULT_RATE_PER_MILE); setRateUnit("mi");
-    setPreview([]); setDistances([]); setPurposes({}); setOverrides({});
+    setPreview([]); setRetrievalMeta(null); setDistances([]); setPurposes({}); setOverrides({});
     setFailedSyncIds([]); setConfirmedSyncIds([]); setSyncedCount(null);
     setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
     calculatedMappingRef.current = null;
@@ -257,7 +270,14 @@ const NewJobPage = () => {
     setLoadingPreview(true);
     try {
       const data = await readRecords(selectedBase, selectedTable, distanceCol, 5);
-      setPreview(data.records ?? []);
+      const recs = data.records ?? [];
+      setPreview(recs);
+      setRetrievalMeta({
+        isFullLoad: false,
+        limitReached: false,
+        exhausted: recs.length < 5,
+        total: recs.length,
+      });
       setDistances([]);
       setPurposes({});
       setOverrides({});
@@ -268,6 +288,56 @@ const NewJobPage = () => {
       calculatedMappingRef.current = null;
     } catch (e: unknown) {
       toast({ title: "Error", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  const handleLoadEligibleRecords = async () => {
+    if (!distanceCol || !startCol || !endCol) {
+      toast({
+        title: "Mapping required",
+        description: "Please map Start Address, End Address, and Distance Output before loading records.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setLoadingPreview(true);
+    try {
+      // Ensure latest column mapping is saved to Supabase before fetching projected records
+      await mappingCoordinatorRef.current?.waitForLatest();
+
+      const data = await readEligibleRecords(selectedBase, selectedTable, distanceCol, 500);
+      const recs = data.records ?? [];
+      setPreview(recs);
+      setRetrievalMeta({
+        isFullLoad: true,
+        limitReached: data.limitReached,
+        exhausted: data.exhausted,
+        total: data.total,
+      });
+      setDistances([]);
+      setPurposes({});
+      setOverrides({});
+      setFailedSyncIds([]);
+      setConfirmedSyncIds([]);
+      setSyncedCount(null);
+      setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
+      calculatedMappingRef.current = null;
+
+      if (data.limitReached) {
+        toast({
+          title: "Record limit reached",
+          description: "Loaded maximum 500 eligible records. Additional uncalculated records may remain in Airtable.",
+        });
+      } else {
+        toast({
+          title: "Records loaded",
+          description: `Loaded all ${data.total} eligible records from table.`,
+        });
+      }
+    } catch (e: unknown) {
+      toast({ title: "Error loading records", description: (e as Error).message, variant: "destructive" });
     } finally {
       setLoadingPreview(false);
     }
@@ -305,12 +375,13 @@ const NewJobPage = () => {
     else toast({ title: "AI error", description: message, variant: "destructive" });
   };
 
-  /** Bulk mode: drafts purposes for every row with a note that lacks one. Never fails the distance job and avoids duplicate credits. */
-  const draftBulkPurposes = async () => {
+  /** User-requested: drafts purposes in bounded batches of 10 for rows with notes lacking purposes. */
+  const draftBulkPurposesBatch = async () => {
     if (!notesCol || generatingPurposes) return;
-    const rows = preview
+    const allPending = preview
       .map((r) => ({ id: r.id, note: noteOf(r).trim() }))
       .filter((x) => x.note && !purposes[x.id]);
+    const rows = allPending.slice(0, 10);
     if (!rows.length) return;
     setGeneratingPurposes(true);
     try {
@@ -319,6 +390,11 @@ const NewJobPage = () => {
         const next = { ...prev };
         rows.forEach((x, i) => { if (result[i]) next[x.id] = result[i] as string; });
         return next;
+      });
+      const remainingAfterBatch = allPending.length - rows.length;
+      toast({
+        title: "AI purposes drafted",
+        description: `Drafted ${rows.length} purpose(s).${remainingAfterBatch > 0 ? ` ${remainingAfterBatch} row(s) still pending.` : ""}`,
       });
     } catch (err) {
       const e = err as AiAssistError;
@@ -350,9 +426,23 @@ const NewJobPage = () => {
     }
   };
 
+  const validAddressCount = preview.filter((r) => {
+    const addr = addressesOf(r);
+    return Boolean(addr.start.trim() && addr.end.trim());
+  }).length;
+
   const handleCalculate = async () => {
     if (!preview.length || !startCol || !endCol) return;
+
+    if (credits < validAddressCount) {
+      showCreditsToast(
+        `Calculation requires ${validAddressCount} credits, but you only have ${credits} credits available. Please purchase more credits to proceed.`
+      );
+      return;
+    }
+
     setCalculating(true);
+    cancelCalculationRef.current = false;
     calculatedMappingRef.current = { start: startCol, end: endCol, distance: distanceCol };
     setConfirmedSyncIds([]);
     setFailedSyncIds([]);
@@ -360,17 +450,48 @@ const NewJobPage = () => {
     setSyncProgress({ processed: 0, confirmed: 0, failed: 0, indeterminate: 0, total: 0 });
 
     try {
-      const pairs: AddressPair[] = preview.map((r) => ({ record_id: r.id, ...addressesOf(r) }));
+      const recordsToCalculate = preview.map((r) => ({
+        id: r.id,
+        ...addressesOf(r),
+      }));
 
-      const result = await calculateDistances(pairs);
-      const results = result.results ?? [];
-      setDistances(results);
-      setShowSummary(true);
-      toast({
-        title: "Hesaplama tamamlandı",
-        description: `${results.filter((r) => r.status === "ok").length} satır başarılı, ${results.filter((r) => r.status !== "ok").length} satır doğrulanamadı.`,
+      const res = await executeBulkDistanceCalculation(recordsToCalculate, {
+        batchSize: 5,
+        availableCredits: credits,
+        isCancelled: () => cancelCalculationRef.current,
+        onBatchComplete: (batchResults, creditsRemaining) => {
+          setDistances((prev) => {
+            const nextMap = new Map(prev.map((d) => [d.record_id, d]));
+            for (const b of batchResults) nextMap.set(b.record_id, b);
+            return Array.from(nextMap.values());
+          });
+          if (typeof creditsRemaining === "number") {
+            setCredits(creditsRemaining);
+          }
+        },
+        onProgress: (p) => {
+          setCalcProgress(p);
+        },
       });
-      void draftBulkPurposes();
+
+      setDistances(res.results);
+      if (typeof res.creditsRemaining === "number") {
+        setCredits(res.creditsRemaining);
+      }
+      setShowSummary(true);
+
+      if (res.cancelled) {
+        toast({
+          title: "Calculation cancelled",
+          description: `Stopped scheduling new batches. Completed results have been preserved (${res.summary.ok} ok, ${res.summary.error + res.summary.indeterminate} uncompleted).`,
+        });
+      } else {
+        toast({
+          title: "Hesaplama tamamlandı",
+          description: `${res.summary.ok} satır başarılı, ${res.summary.error + res.summary.indeterminate} satır doğrulanamadı.`,
+        });
+      }
+      // Note: Never auto-invoke draftBulkPurposes() for bulk calculations!
     } catch (e: unknown) {
       const msg = (e as Error).message;
       if (msg.includes("402") || msg.includes("Insufficient credits")) {
@@ -380,6 +501,7 @@ const NewJobPage = () => {
       }
     } finally {
       setCalculating(false);
+      setCalcProgress(null);
     }
   };
 
@@ -585,40 +707,98 @@ const NewJobPage = () => {
 
             {/* Actions */}
             {startCol && endCol && distanceCol && (
-              <div className="flex gap-3">
-                <Button onClick={handlePreview} disabled={loadingPreview || calculating || syncing}>
-                  {loadingPreview ? "Loading..." : "Fetch Preview"}
-                </Button>
-                {preview.length > 0 && (
-                  <Button onClick={handleCalculate} disabled={calculating || syncing}>
-                    {calculating ? "Calculating..." : "Calculate Distances"}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button onClick={handlePreview} disabled={loadingPreview || calculating || syncing}>
+                    {loadingPreview ? "Loading..." : "Fetch Preview (5)"}
                   </Button>
-                )}
-                {distances.length > 0 && (
                   <Button
-                    onClick={handleSync}
-                    disabled={
-                      syncing ||
-                      calculating ||
-                      generatingPurposes ||
-                      allSynced ||
-                      mappingStatus === "saving" ||
-                      mappingStatus === "error" ||
-                      mappingStatus === "loading"
-                    }
+                    variant="secondary"
+                    onClick={handleLoadEligibleRecords}
+                    disabled={loadingPreview || calculating || syncing}
                   >
-                    {syncing
-                      ? "Syncing..."
-                      : generatingPurposes
-                      ? "Generating AI Purposes..."
-                      : allSynced
-                      ? "✓ All Records Synced"
-                      : hasFailedSync
-                      ? `Retry Failed Records (${failedSyncIds.length})`
-                      : "Sync to Airtable"}
+                    {loadingPreview ? "Loading..." : "Load Eligible Records (up to 500)"}
                   </Button>
+                  {preview.length > 0 && (
+                    <Button
+                      onClick={handleCalculate}
+                      disabled={calculating || syncing || credits < validAddressCount}
+                    >
+                      {calculating ? "Calculating..." : `Calculate Distances (${validAddressCount} credits)`}
+                    </Button>
+                  )}
+                  {calculating && (
+                    <Button
+                      variant="outline"
+                      onClick={() => { cancelCalculationRef.current = true; }}
+                    >
+                      Stop After Current Batch
+                    </Button>
+                  )}
+                  {notesCol && preview.some((r) => noteOf(r).trim() && !purposes[r.id]) && (
+                    <Button
+                      variant="outline"
+                      onClick={draftBulkPurposesBatch}
+                      disabled={calculating || syncing || generatingPurposes}
+                    >
+                      {generatingPurposes ? "Drafting AI (10)..." : "Draft AI Purposes (10 Records)"}
+                    </Button>
+                  )}
+                  {distances.length > 0 && (
+                    <Button
+                      onClick={handleSync}
+                      disabled={
+                        syncing ||
+                        calculating ||
+                        generatingPurposes ||
+                        allSynced ||
+                        mappingStatus === "saving" ||
+                        mappingStatus === "error" ||
+                        mappingStatus === "loading"
+                      }
+                    >
+                      {syncing
+                        ? "Syncing..."
+                        : generatingPurposes
+                        ? "Generating AI Purposes..."
+                        : allSynced
+                        ? "✓ All Records Synced"
+                        : hasFailedSync
+                        ? `Retry Failed Records (${failedSyncIds.length})`
+                        : "Sync to Airtable"}
+                    </Button>
+                  )}
+                </div>
+
+                {preview.length > 0 && (
+                  <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                    <span>
+                      {validAddressCount} valid address pair(s) to calculate.
+                      {preview.length - validAddressCount > 0 && ` (${preview.length - validAddressCount} invalid/empty address pair(s) excluded from credits)`}
+                    </span>
+                    <span className={credits < validAddressCount ? "text-destructive font-semibold" : ""}>
+                      Available balance: {credits} credits
+                    </span>
+                  </div>
                 )}
               </div>
+            )}
+
+            {/* Calculation Progress */}
+            {calculating && calcProgress && (
+              <Card>
+                <CardContent className="py-4 space-y-2">
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Calculating batch {calcProgress.currentBatch} of {calcProgress.totalBatches} ({calcProgress.processed} of {calcProgress.total} records)</span>
+                    <span>
+                      {calcProgress.completed} ok
+                      {calcProgress.failed > 0 ? `, ${calcProgress.failed} failed` : ""}
+                      {calcProgress.indeterminate > 0 ? `, ${calcProgress.indeterminate} unconfirmed` : ""}
+                    </span>
+                  </div>
+                  <Progress value={(calcProgress.processed / calcProgress.total) * 100} />
+                </CardContent>
+              </Card>
             )}
 
             {/* Sync Progress */}
@@ -641,7 +821,22 @@ const NewJobPage = () => {
             {/* Preview Table */}
             {preview.length > 0 && (
               <Card>
-                <CardHeader><CardTitle className="text-base">Preview ({preview.length} records)</CardTitle></CardHeader>
+                <CardHeader className="flex flex-row items-center justify-between gap-2 flex-wrap">
+                  <CardTitle className="text-base">
+                    {retrievalMeta?.isFullLoad ? "Eligible Records" : "Preview"} ({preview.length} records)
+                  </CardTitle>
+                  {retrievalMeta?.isFullLoad && (
+                    retrievalMeta.limitReached ? (
+                      <Badge variant="outline" className="text-amber-600 border-amber-500">
+                        500 records loaded (limit reached; more records may exist in Airtable)
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-green-700 bg-green-50 border-green-200">
+                        All {retrievalMeta.total} eligible records loaded (complete)
+                      </Badge>
+                    )
+                  )}
+                </CardHeader>
                 <CardContent>
                   <Table>
                     <TableHeader>
