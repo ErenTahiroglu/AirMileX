@@ -32,6 +32,23 @@ export const readRecords = (
 ) =>
   callProxy("read-records", { baseId, tableId, distanceFieldId, limit });
 
+export interface PaginatedRecordsResult {
+  records: Array<{ id: string; fields: Record<string, unknown> }>;
+  total: number;
+  limitReached: boolean;
+  exhausted: boolean;
+  pageCount: number;
+  offset?: string;
+}
+
+export const readEligibleRecords = (
+  baseId: string,
+  tableId: string,
+  distanceFieldId: string,
+  maxRecords = 500
+): Promise<PaginatedRecordsResult> =>
+  callProxy("read-all-records", { baseId, tableId, distanceFieldId, maxRecords });
+
 /**
  * Semantic sync record. The server maps these keys to the caller's saved
  * column mapping for the table; arbitrary field names are never accepted.
