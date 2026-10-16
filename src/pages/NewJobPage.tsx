@@ -40,6 +40,8 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ArrowRight, Info, KeyRound } from "lucide-react";
 import { ToastAction } from "@/components/ui/toast";
 
 interface AirtableBase { id: string; name: string }
@@ -676,9 +678,22 @@ const NewJobPage = () => {
         <h2 className="sr-only">Job setup</h2>
         {noSettings ? (
           <Card>
-            <CardContent className="py-8 text-center">
-              <p className="text-muted-foreground mb-4">Configure your Airtable PAT in Settings first.</p>
-              <Button asChild><Link to="/settings">Go to Settings</Link></Button>
+            <CardContent className="py-10 text-center space-y-4">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <KeyRound className="h-6 w-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-lg font-semibold text-foreground">Connect Airtable to Start</h3>
+                <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                  You have <strong className="text-foreground">{credits} free mileage credits</strong> available. Connect your Airtable account with a Personal Access Token to load your addresses and calculate driving distances.
+                </p>
+              </div>
+              <Button asChild>
+                <Link to="/settings" className="inline-flex items-center gap-2">
+                  Connect Airtable in Settings
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
             </CardContent>
           </Card>
         ) : (
@@ -734,16 +749,23 @@ const NewJobPage = () => {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {[
-                    { label: "Start Address", value: startCol, onChange: setStartCol, optional: false },
-                    { label: "End Address", value: endCol, onChange: setEndCol, optional: false },
-                    { label: "Distance Output", value: distanceCol, onChange: setDistanceCol, optional: false },
-                    { label: "Reimbursement Amount", value: costCol, onChange: setCostCol, optional: true },
-                    { label: "Status / Log", value: statusCol, onChange: setStatusCol, optional: true },
-                    { label: "Trip Notes / Reason", value: notesCol, onChange: setNotesCol, optional: true },
-                    { label: "Business Purpose", value: purposeCol, onChange: setPurposeCol, optional: true },
-                  ].map(({ label, value, onChange, optional }) => (
+                    { label: "Start Address", value: startCol, onChange: setStartCol, required: true },
+                    { label: "End Address", value: endCol, onChange: setEndCol, required: true },
+                    { label: "Distance Output", value: distanceCol, onChange: setDistanceCol, required: true },
+                    { label: "Reimbursement Amount", value: costCol, onChange: setCostCol, required: false },
+                    { label: "Status / Log", value: statusCol, onChange: setStatusCol, required: false },
+                    { label: "Trip Notes / Reason", value: notesCol, onChange: setNotesCol, required: false },
+                    { label: "Business Purpose", value: purposeCol, onChange: setPurposeCol, required: false },
+                  ].map(({ label, value, onChange, required }) => (
                     <div key={label} className="space-y-2">
-                      <Label>{label}{optional && <span className="text-muted-foreground"> (optional)</span>}</Label>
+                      <div className="flex items-center justify-between">
+                        <Label>{label}</Label>
+                        {required ? (
+                          <Badge variant="outline" className="text-[10px] py-0 px-1.5 border-primary/40 text-primary font-semibold">Required</Badge>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">Optional</span>
+                        )}
+                      </div>
                       <Select
                         value={value || undefined}
                         onValueChange={(v) => onChange(v === "__none__" ? "" : v)}
@@ -751,12 +773,17 @@ const NewJobPage = () => {
                       >
                         <SelectTrigger><SelectValue placeholder={`Select ${label}`} /></SelectTrigger>
                         <SelectContent>
-                          {optional && <SelectItem value="__none__">None</SelectItem>}
+                          {!required && <SelectItem value="__none__">None</SelectItem>}
                           {fields.map((f) => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     </div>
                   ))}
+                  {(!startCol || !endCol || !distanceCol) && (
+                    <p className="text-xs text-muted-foreground bg-muted/40 p-2.5 rounded border border-border">
+                      💡 Select <strong>Start Address</strong>, <strong>End Address</strong>, and <strong>Distance Output</strong> columns above to enable preview and calculation actions.
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -814,94 +841,116 @@ const NewJobPage = () => {
 
             {/* Actions */}
             {startCol && endCol && distanceCol && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button onClick={handlePreview} disabled={loadingPreview || calculating || syncing}>
-                    {loadingPreview ? "Loading..." : "Fetch Preview (5)"}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={handleLoadEligibleRecords}
-                    disabled={loadingPreview || calculating || syncing}
-                  >
-                    {loadingPreview ? "Loading..." : "Load Eligible Records (up to 500)"}
-                  </Button>
-                  {preview.length > 0 && (
-                    <>
-                      {validRemainingCount > 0 && (
-                        <Button
-                          onClick={handleCalculate}
-                          disabled={calculating || syncing || credits < validRemainingCount}
-                        >
-                          {calculating
-                            ? "Calculating..."
-                            : distances.length > 0
-                            ? `Continue Calculation (${validRemainingCount} remaining, ${validRemainingCount} credits)`
-                            : `Calculate Distances (${validAddressCount} credits)`}
-                        </Button>
-                      )}
-                      {indeterminateRecordIds.size > 0 && validIndeterminateCount > 0 && (
-                        <Button
-                          variant="outline"
-                          onClick={handleRetryIndeterminate}
-                          disabled={calculating || syncing || credits < validIndeterminateCount}
-                        >
-                          {`Retry Indeterminate (${validIndeterminateCount} records, ${validIndeterminateCount} credits)`}
-                        </Button>
-                      )}
-                      {distances.length > 0 && (
-                        <Button
-                          variant="outline"
-                          onClick={handleResetAndRecalculateAll}
-                          disabled={calculating || syncing || credits < validAddressCount}
-                        >
-                          Recalculate All Records ({validAddressCount} credits)
-                        </Button>
-                      )}
-                    </>
-                  )}
-                  {calculating && (
-                    <Button
-                      variant="outline"
-                      onClick={() => { cancelCalculationRef.current = true; }}
-                    >
-                      Stop After Current Batch
+              <div className="space-y-4">
+                <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button onClick={handlePreview} disabled={loadingPreview || calculating || syncing}>
+                      {loadingPreview ? "Loading..." : "Fetch Preview (5)"}
                     </Button>
-                  )}
-                  {notesCol && preview.some((r) => noteOf(r).trim() && !purposes[r.id]) && (
                     <Button
-                      variant="outline"
-                      onClick={draftBulkPurposesBatch}
-                      disabled={calculating || syncing || generatingPurposes}
+                      variant="secondary"
+                      onClick={handleLoadEligibleRecords}
+                      disabled={loadingPreview || calculating || syncing}
                     >
-                      {generatingPurposes ? "Drafting AI (10)..." : "Draft AI Purposes (10 Records)"}
+                      {loadingPreview ? "Loading..." : "Load Eligible Records (up to 500)"}
                     </Button>
-                  )}
-                  {distances.length > 0 && (
-                    <Button
-                      onClick={handleSync}
-                      disabled={
-                        syncing ||
-                        calculating ||
-                        generatingPurposes ||
-                        allSynced ||
-                        mappingStatus === "saving" ||
-                        mappingStatus === "error" ||
-                        mappingStatus === "loading"
-                      }
-                    >
-                      {syncing
-                        ? "Syncing..."
-                        : generatingPurposes
-                        ? "Generating AI Purposes..."
-                        : allSynced
-                        ? "✓ All Records Synced"
-                        : hasFailedSync
-                        ? `Retry Failed Records (${failedSyncIds.length})`
-                        : "Sync to Airtable"}
-                    </Button>
-                  )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground pt-1 border-t border-border/50">
+                    <p>• <strong>Preview (5):</strong> Samples up to 5 uncalculated records to test mapping before spending credits.</p>
+                    <p>• <strong>Load Eligible (up to 500):</strong> Bulk loads all uncalculated records in this table for full processing.</p>
+                  </div>
                 </div>
+
+                {preview.length > 0 && credits < (distances.length > 0 ? validRemainingCount : validAddressCount) && (
+                  <Alert variant="destructive" className="border-destructive/40 bg-destructive/5">
+                    <Info className="h-4 w-4" />
+                    <AlertTitle>Insufficient Credits</AlertTitle>
+                    <AlertDescription className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs mt-1">
+                      <span>
+                        This calculation requires <strong>{distances.length > 0 ? validRemainingCount : validAddressCount} credits</strong>, but your available balance is <strong>{credits} credits</strong>.
+                      </span>
+                      <Button size="sm" variant="destructive" asChild className="shrink-0">
+                        <Link to="/pricing">Buy 500 Credits ($9)</Link>
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {preview.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    {validRemainingCount > 0 && (
+                      <Button
+                        onClick={handleCalculate}
+                        disabled={calculating || syncing || credits < validRemainingCount}
+                      >
+                        {calculating
+                          ? "Calculating..."
+                          : distances.length > 0
+                          ? `Continue Calculation (${validRemainingCount} remaining, ${validRemainingCount} credits)`
+                          : `Calculate Distances (${validAddressCount} credits)`}
+                      </Button>
+                    )}
+                    {indeterminateRecordIds.size > 0 && validIndeterminateCount > 0 && (
+                      <Button
+                        variant="outline"
+                        onClick={handleRetryIndeterminate}
+                        disabled={calculating || syncing || credits < validIndeterminateCount}
+                      >
+                        {`Retry Indeterminate (${validIndeterminateCount} records, ${validIndeterminateCount} credits)`}
+                      </Button>
+                    )}
+                    {distances.length > 0 && (
+                      <Button
+                        variant="outline"
+                        onClick={handleResetAndRecalculateAll}
+                        disabled={calculating || syncing || credits < validAddressCount}
+                      >
+                        Recalculate All Records ({validAddressCount} credits)
+                      </Button>
+                    )}
+                    {calculating && (
+                      <Button
+                        variant="outline"
+                        onClick={() => { cancelCalculationRef.current = true; }}
+                      >
+                        Stop After Current Batch
+                      </Button>
+                    )}
+                    {notesCol && preview.some((r) => noteOf(r).trim() && !purposes[r.id]) && (
+                      <Button
+                        variant="outline"
+                        onClick={draftBulkPurposesBatch}
+                        disabled={calculating || syncing || generatingPurposes}
+                      >
+                        {generatingPurposes ? "Drafting AI (10)..." : "Draft AI Purposes (10 Records)"}
+                      </Button>
+                    )}
+                    {distances.length > 0 && (
+                      <Button
+                        onClick={handleSync}
+                        disabled={
+                          syncing ||
+                          calculating ||
+                          generatingPurposes ||
+                          allSynced ||
+                          mappingStatus === "saving" ||
+                          mappingStatus === "error" ||
+                          mappingStatus === "loading"
+                        }
+                      >
+                        {syncing
+                          ? "Syncing..."
+                          : generatingPurposes
+                          ? "Generating AI Purposes..."
+                          : allSynced
+                          ? "✓ All Records Synced"
+                          : hasFailedSync
+                          ? `Retry Failed Records (${failedSyncIds.length})`
+                          : "Sync to Airtable"}
+                      </Button>
+                    )}
+                  </div>
+                )}
 
                 {preview.length > 0 && (
                   <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
@@ -990,8 +1039,9 @@ const NewJobPage = () => {
                       {preview.map((r) => {
                         const addr = addressesOf(r);
                         const dist = distances.find((d) => d.record_id === r.id);
+                        const isBlankPair = !addr.start.trim() || !addr.end.trim();
                         return (
-                          <TableRow key={r.id}>
+                          <TableRow key={r.id} className={isBlankPair ? "bg-muted/20" : undefined}>
                             <TableCell className="align-top">
                               <PurposeCell
                                 purpose={undefined}
@@ -1001,11 +1051,21 @@ const NewJobPage = () => {
                               />
                             </TableCell>
                             <TableCell className="font-mono text-xs">{r.id.slice(0, 10)}</TableCell>
-                            <TableCell>{addr.start}</TableCell>
-                            <TableCell>{addr.end}</TableCell>
+                            <TableCell>
+                              {addr.start.trim() || <span className="text-xs text-muted-foreground italic">(empty)</span>}
+                            </TableCell>
+                            <TableCell>
+                              {addr.end.trim() || <span className="text-xs text-muted-foreground italic">(empty)</span>}
+                            </TableCell>
                             {distances.length > 0 && (
                               <TableCell>
-                                {dist?.status === "ok" ? `${dist.distance_mi.toFixed(2)} mi` : dist?.error ?? "—"}
+                                {isBlankPair ? (
+                                  <span className="text-xs text-muted-foreground">Empty address (0 credits)</span>
+                                ) : dist?.status === "ok" ? (
+                                  `${dist.distance_mi.toFixed(2)} mi`
+                                ) : (
+                                  dist?.error ?? "—"
+                                )}
                               </TableCell>
                             )}
                             {distances.length > 0 && costCol && (
@@ -1057,10 +1117,10 @@ const NewJobPage = () => {
       <Dialog open={showSummary && distances.length > 0} onOpenChange={setShowSummary}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Hesaplama özeti</DialogTitle>
+            <DialogTitle>Calculation Summary</DialogTitle>
             <DialogDescription>
-              {okCount} satır başarıyla hesaplandı, {failedCount} satır doğrulanamadı.
-              {syncedCount !== null ? ` ${syncedCount} satır Airtable'a yazıldı.` : ""}
+              {okCount} record(s) calculated successfully, {failedCount} could not be verified.
+              {syncedCount !== null ? ` ${syncedCount} record(s) synced to Airtable.` : ""}
             </DialogDescription>
           </DialogHeader>
 
@@ -1070,8 +1130,8 @@ const NewJobPage = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Record ID</TableHead>
-                    <TableHead>Adres</TableHead>
-                    <TableHead>Sebep</TableHead>
+                    <TableHead>Address</TableHead>
+                    <TableHead>Reason</TableHead>
                     <TableHead className="text-right">AI</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1101,13 +1161,13 @@ const NewJobPage = () => {
               </Table>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">Tüm satırlar başarıyla hesaplandı.</p>
+            <p className="text-sm text-muted-foreground">All records were calculated successfully.</p>
           )}
 
           <p className="text-xs text-muted-foreground">
             {statusCol
-              ? "Doğrulanamayan satırlar atlanır ve Airtable'daki durum sütununa 'Adres Bulunamadı' yazılır."
-              : "Doğrulanamayan satırları Airtable'da işaretlemek için bir 'Status / Log' sütunu seçin."}
+              ? "Unverified records are skipped, or marked with 'Adres Bulunamadı' in your Airtable status column."
+              : "To mark unverified records in Airtable, select a 'Status / Log' column in Column Mapping."}
           </p>
 
           <p className="text-xs text-muted-foreground text-center pt-1">
@@ -1148,9 +1208,9 @@ const NewJobPage = () => {
                 calculatedMappingRef.current = null;
               }}
             >
-              Tabloyu temizle
+              Clear Results
             </Button>
-            <Button onClick={() => navigate("/dashboard")}>Dashboard'a dön</Button>
+            <Button onClick={() => navigate("/dashboard")}>Return to Dashboard</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

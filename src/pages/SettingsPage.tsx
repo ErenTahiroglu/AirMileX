@@ -22,7 +22,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { LogOut, Trash2, Download } from "lucide-react";
+import { LogOut, Trash2, Download, ArrowRight, ExternalLink, KeyRound } from "lucide-react";
 
 const SettingsPage = () => {
   const { user } = useAuth();
@@ -39,6 +39,7 @@ const SettingsPage = () => {
   const [sendingCode, setSendingCode] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [hasPat, setHasPat] = useState(false);
+  const [connectionUser, setConnectionUser] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -64,9 +65,12 @@ const SettingsPage = () => {
       if (pat) payload.airtable_pat = pat;
 
       await upsertSettings(payload);
-      if (pat) setHasPat(true);
+      if (pat) {
+        setHasPat(true);
+        setConnectionUser(null);
+      }
       setPat("");
-      toast({ title: "Saved", description: "Settings updated." });
+      toast({ title: "Saved", description: "Settings updated successfully." });
     } catch (err: unknown) {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
     } finally {
@@ -78,8 +82,10 @@ const SettingsPage = () => {
     setTesting(true);
     try {
       const result = await testConnection();
+      setConnectionUser(result.email || "Verified");
       toast({ title: "Connected", description: `Authenticated as ${result.email || "user"}.` });
     } catch (err: unknown) {
+      setConnectionUser(null);
       toast({ title: "Connection Failed", description: (err as Error).message, variant: "destructive" });
     } finally {
       setTesting(false);
@@ -200,25 +206,77 @@ const SettingsPage = () => {
         <h2 className="sr-only">Account settings</h2>
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Airtable Integration</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <KeyRound className="h-4 w-4 text-primary" />
+                Airtable Integration
+              </CardTitle>
+              {hasPat ? (
+                <Badge variant="outline" className="text-xs border-green-600 text-green-700 bg-green-50">
+                  {connectionUser ? `✓ Connected (${connectionUser})` : "✓ Token Saved"}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-xs border-amber-500 text-amber-700 bg-amber-50">
+                  Token Required
+                </Badge>
+              )}
+            </div>
+            <CardDescription>
+              Connect your Airtable account with a Personal Access Token to read addresses and write back calculated distances.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-foreground">How to create your Personal Access Token:</span>
+                <a
+                  href="https://airtable.com/create/tokens"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
+                >
+                  Create token on Airtable
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+              <ol className="list-decimal list-inside space-y-1 pl-1">
+                <li>Create a token named <span className="font-mono text-foreground">AirMileX</span>.</li>
+                <li>Add scopes: <span className="font-mono text-foreground">data.records:read</span>, <span className="font-mono text-foreground">data.records:write</span>, <span className="font-mono text-foreground">schema.bases:read</span>.</li>
+                <li>Under <strong>Access</strong>, select the workspace or bases containing your mileage tables.</li>
+                <li>Paste the token below and click <strong>Save Settings</strong>.</li>
+              </ol>
+            </div>
+
             <div className="space-y-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center justify-between">
                 <Label htmlFor="pat">Personal Access Token</Label>
-                {hasPat && <Badge variant="outline" className="text-xs border-success text-success-foreground">Saved (Hidden)</Badge>}
+                {hasPat && <span className="text-xs text-muted-foreground">Token is securely stored</span>}
               </div>
               <Input
                 id="pat"
                 type="password"
                 value={pat}
                 onChange={(e) => setPat(e.target.value)}
-                placeholder={hasPat ? "Enter new token to replace" : "pat..."}
+                placeholder={hasPat ? "•••••••••••••••••••• (Enter new token to replace)" : "pat..."}
               />
             </div>
-            <Button variant="outline" size="sm" onClick={handleTest} disabled={testing || !hasPat}>
-              {testing ? "Testing..." : "Test Connection"}
-            </Button>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button onClick={handleSave} disabled={saving || (!pat && hasPat)} size="sm">
+                {saving ? "Saving..." : "Save Token"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleTest} disabled={testing || !hasPat}>
+                {testing ? "Testing..." : "Test Connection"}
+              </Button>
+              {hasPat && (
+                <Button variant="secondary" size="sm" asChild className="ml-auto">
+                  <Link to="/new-job" className="inline-flex items-center gap-1">
+                    Start Mileage Job
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                </Button>
+              )}
+            </div>
           </CardContent>
         </Card>
 

@@ -18,7 +18,8 @@ import { consumePostAuthRedirect, storePostAuthRedirect } from "@/lib/postAuthRe
 import { MapPin, Zap, FileText } from "lucide-react";
 
 const AuthPage = () => {
-  const [isLogin, setIsLogin] = useState(true);
+  const [searchParams] = useSearchParams();
+  const [isLogin, setIsLogin] = useState(() => searchParams.get("mode") !== "signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -26,11 +27,13 @@ const AuthPage = () => {
   const { signIn, signUp } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [searchParams] = useSearchParams();
 
   // Preserve a requested destination (e.g. an app authorization request) across sign-in.
   useEffect(() => {
     storePostAuthRedirect(searchParams.get("next"));
+    if (searchParams.get("mode") === "signup") {
+      setIsLogin(false);
+    }
   }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -98,6 +101,9 @@ const AuthPage = () => {
         <div className="w-full max-w-4xl grid gap-10 md:grid-cols-2 md:gap-16 items-center">
           {/* Hero / Marketing Section */}
           <div className="space-y-6 text-center md:text-left">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+              ✨ 50 Free Mileage Credits on Signup • No Map API Key Needed
+            </div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
               AirMileX: Automate Your Airtable Mileage Tracking
             </h1>
@@ -112,11 +118,11 @@ const AuthPage = () => {
               </div>
               <div className="flex items-start gap-3">
                 <Zap className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                <p className="text-sm text-muted-foreground">Batch-calculate driving distances automatically with built-in mapping.</p>
+                <p className="text-sm text-muted-foreground">Batch-calculate driving distances with operator-managed routing (no personal map key needed).</p>
               </div>
               <div className="flex items-start gap-3">
                 <FileText className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                <p className="text-sm text-muted-foreground">Generate accurate, audit-ready mileage records automatically.</p>
+                <p className="text-sm text-muted-foreground">Start with 50 free mileage credits; buy 500 additional credits for $9 whenever you need more.</p>
               </div>
             </div>
 
@@ -131,8 +137,12 @@ const AuthPage = () => {
           <h2 id="auth-heading" className="sr-only">Sign in or create an account</h2>
           <Card className="w-full max-w-sm mx-auto md:mx-0">
             <CardHeader className="text-center">
-              <CardTitle className="text-xl">Get Started</CardTitle>
-              <CardDescription>{isLogin ? "Sign in to your account" : "Create a new account"}</CardDescription>
+              <CardTitle className="text-xl">{isLogin ? "Welcome Back" : "Claim 50 Free Credits"}</CardTitle>
+              <CardDescription>
+                {isLogin
+                  ? "Sign in to access your Airtable mileage jobs"
+                  : "Create an account — no credit card or map API key required"}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <Button

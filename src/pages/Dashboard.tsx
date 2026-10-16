@@ -3,23 +3,19 @@ import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getTotalRecords, getRecentLogs, CalculationLog } from "@/services/logs";
 import { getSettings } from "@/services/settings";
-import { createCheckout } from "@/services/paddle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useToast } from "@/hooks/use-toast";
 import AddressCleaner from "@/components/AddressCleaner";
 import SavedAddressPairs from "@/components/SavedAddressPairs";
 import QuickMileageCalculator, { type RoutePrefill } from "@/components/QuickMileageCalculator";
 
 const Dashboard = () => {
   const { user, signOut } = useAuth();
-  const { toast } = useToast();
   const [total, setTotal] = useState(0);
   const [credits, setCredits] = useState<number | null>(null);
   const [logs, setLogs] = useState<CalculationLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [buyingCredits, setBuyingCredits] = useState(false);
   const [prefill, setPrefill] = useState<RoutePrefill | null>(null);
 
   useEffect(() => {
@@ -42,22 +38,6 @@ const Dashboard = () => {
     };
     load();
   }, [user]);
-
-  const handleBuyCredits = async () => {
-    setBuyingCredits(true);
-    try {
-      const result = await createCheckout();
-      if (result.checkout_url) {
-        window.open(result.checkout_url, "_blank");
-      } else {
-        toast({ title: "Error", description: "No checkout URL returned.", variant: "destructive" });
-      }
-    } catch (err: any) {
-      toast({ title: "Checkout failed", description: err.message || "Please try again.", variant: "destructive" });
-    } finally {
-      setBuyingCredits(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -104,10 +84,9 @@ const Dashboard = () => {
                   <p className="text-3xl font-bold text-foreground">{credits?.toLocaleString() ?? 0}</p>
                   <Button
                     size="sm"
-                    onClick={handleBuyCredits}
-                    disabled={buyingCredits}
+                    asChild
                   >
-                    {buyingCredits ? "Processing…" : "Buy 500 Credits — $9"}
+                    <Link to="/pricing">Buy 500 Credits — $9</Link>
                   </Button>
                 </>
               )}

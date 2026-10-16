@@ -153,12 +153,14 @@ const QuickMileageCalculator = ({ prefill, hideUpsell = false }: Props) => {
 
             {!hideUpsell && (
             <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-              <p className="text-sm text-foreground">
-                Want to do this for hundreds of rows in your Airtable table with one click?
-                Start with 50 free calculations.
+              <p className="text-sm font-medium text-foreground">
+                Automate your entire Airtable mileage log
               </p>
-              <Button className="mt-3 w-full" onClick={() => navigate("/new-job")}>
-                Start with 50 free calculations
+              <p className="mt-1 text-xs text-muted-foreground">
+                Calculate driving distances for hundreds of rows and sync directly into your Airtable base. Start with 50 free credits upon signup.
+              </p>
+              <Button className="mt-3 w-full" onClick={() => navigate("/?mode=signup&next=/new-job")}>
+                Claim 50 Free Mileage Credits
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
