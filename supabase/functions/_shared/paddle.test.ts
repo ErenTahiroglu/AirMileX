@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   computeHmacSha256Hex,
+  createPaddleCheckoutTransaction,
   processPaddleWebhookRequest,
+  resolvePaddleApiHost,
   timingSafeEqual,
+  validatePaddleCredentials,
   validatePaddleWebhookPayload,
   verifyPaddleSignature,
+  PADDLE_API_HOSTS,
   type PaddleFulfillmentRpcResponse,
 } from "./paddle.ts";
 
@@ -562,4 +566,397 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
       expect(res.body.error).toContain("PADDLE_WEBHOOK_SECRET not configured");
     });
   });
+
+  describe("AirMileX Phase 5A: Paddle Checkout Environment Selection & Security", () => {
+    const VALID_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
+    const SANDBOX_KEY = "pdl_sdb_apikey_99887766554433221100";
+    const LIVE_KEY = "pdl_live_apikey_11223344556677889900";
+    const GENERIC_KEY = "pdl_apikey_test_generic_secret_value";
+    const PRICE_ID = "pri_01h8444a7qzp7k7pkv1k8cgn";
+
+    describe("Environment Host Resolution & Validation", () => {
+      it("resolves sandbox environment to sandbox API host", () => {
+        const res = resolvePaddleApiHost("sandbox");
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+          expect(res.host).toBe(PADDLE_API_HOSTS.sandbox);
+          expect(res.host).toBe("https://sandbox-api.paddle.com");
+          expect(res.environment).toBe("sandbox");
+        }
+      });
+
+      it("resolves live and production environments to live API host", () => {
+        const liveRes = resolvePaddleApiHost("live");
+        expect(liveRes.ok).toBe(true);
+        if (liveRes.ok) {
+          expect(liveRes.host).toBe(PADDLE_API_HOSTS.live);
+          expect(liveRes.host).toBe("https://api.paddle.com");
+          expect(liveRes.environment).toBe("live");
+        }
+
+        const prodRes = resolvePaddleApiHost("production");
+        expect(prodRes.ok).toBe(true);
+        if (prodRes.ok) {
+          expect(prodRes.host).toBe("https://api.paddle.com");
+          expect(prodRes.environment).toBe("live");
+        }
+      });
+
+      it("handles case insensitivity and whitespace trimming", () => {
+        const res1 = resolvePaddleApiHost("  SANDBOX  ");
+        expect(res1.ok).toBe(true);
+        if (res1.ok) {
+          expect(res1.host).toBe("https://sandbox-api.paddle.com");
+        }
+
+        const res2 = resolvePaddleApiHost(" Live ");
+        expect(res2.ok).toBe(true);
+        if (res2.ok) {
+          expect(res2.host).toBe("https://api.paddle.com");
+        }
+      });
+
+      it("fails closed on missing or empty environment", () => {
+        const nullRes = resolvePaddleApiHost(null);
+        expect(nullRes.ok).toBe(false);
+        if (!nullRes.ok) {
+          expect(nullRes.error).toContain("PADDLE_ENVIRONMENT configuration missing");
+        }
+
+        const undefRes = resolvePaddleApiHost(undefined);
+        expect(undefRes.ok).toBe(false);
+        if (!undefRes.ok) {
+          expect(undefRes.error).toContain("PADDLE_ENVIRONMENT configuration missing");
+        }
+
+        const emptyRes = resolvePaddleApiHost("");
+        expect(emptyRes.ok).toBe(false);
+      });
+
+      it("fails closed on invalid, unknown, or arbitrary environment values", () => {
+        const invalidEnvs = ["staging", "local", "dev", "test", "http://malicious-site.com", "true"];
+        for (const env of invalidEnvs) {
+          const res = resolvePaddleApiHost(env);
+          expect(res.ok).toBe(false);
+          if (!res.ok) {
+            expect(res.error).toContain("Invalid PADDLE_ENVIRONMENT");
+          }
+        }
+      });
+    });
+
+    describe("Credential Pairing & Credential Isolation", () => {
+      it("rejects live API key when environment is sandbox", () => {
+        const res = validatePaddleCredentials("sandbox", LIVE_KEY);
+        expect(res.valid).toBe(false);
+        expect(res.error).toContain("Live Paddle API key cannot be used in sandbox");
+      });
+
+      it("rejects sandbox API key when environment is live", () => {
+        const res = validatePaddleCredentials("live", SANDBOX_KEY);
+        expect(res.valid).toBe(false);
+        expect(res.error).toContain("Sandbox Paddle API key cannot be used in live");
+      });
+
+      it("allows appropriately paired credentials", () => {
+        expect(validatePaddleCredentials("sandbox", SANDBOX_KEY).valid).toBe(true);
+        expect(validatePaddleCredentials("live", LIVE_KEY).valid).toBe(true);
+        expect(validatePaddleCredentials("sandbox", GENERIC_KEY).valid).toBe(true);
+        expect(validatePaddleCredentials("live", GENERIC_KEY).valid).toBe(true);
+      });
+    });
+
+    describe("Requirement 1 & 2: API Host Selection for Sandbox and Live", () => {
+      it("Sandbox configuration selects the Sandbox API host (https://sandbox-api.paddle.com)", async () => {
+        let capturedUrl = "";
+        let capturedHeaders: Record<string, string> = {};
+        let capturedBody = "";
+
+        const mockFetch: typeof fetch = async (url, init) => {
+          capturedUrl = String(url);
+          capturedHeaders = (init?.headers as Record<string, string>) ?? {};
+          capturedBody = String(init?.body ?? "");
+
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: "txn_sdb_001",
+                checkout: { url: "https://sandbox-checkout.paddle.com/checkout/txn_sdb_001" },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(res.status).toBe(200);
+        expect(capturedUrl).toBe("https://sandbox-api.paddle.com/transactions");
+        expect(capturedHeaders["Authorization"]).toBe(`Bearer ${SANDBOX_KEY}`);
+        expect(res.body.transaction_id).toBe("txn_sdb_001");
+        expect(res.body.checkout_url).toBe("https://sandbox-checkout.paddle.com/checkout/txn_sdb_001");
+
+        const parsedBody = JSON.parse(capturedBody);
+        expect(parsedBody.items).toEqual([{ price_id: PRICE_ID, quantity: 1 }]);
+        expect(parsedBody.custom_data).toEqual({ user_id: VALID_USER_ID });
+      });
+
+      it("Live configuration selects the Live API host (https://api.paddle.com)", async () => {
+        let capturedUrl = "";
+        const mockFetch: typeof fetch = async (url) => {
+          capturedUrl = String(url);
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: "txn_live_001",
+                checkout: { url: "https://checkout.paddle.com/checkout/txn_live_001" },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "live",
+          apiKey: LIVE_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(res.status).toBe(200);
+        expect(capturedUrl).toBe("https://api.paddle.com/transactions");
+        expect(res.body.transaction_id).toBe("txn_live_001");
+        expect(res.body.checkout_url).toBe("https://checkout.paddle.com/checkout/txn_live_001");
+      });
+    });
+
+    describe("Requirement 3: Invalid or missing environment configuration fails closed", () => {
+      it("fails closed on missing environment without initiating HTTP transaction", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: undefined,
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain("PADDLE_ENVIRONMENT configuration missing");
+      });
+
+      it("fails closed on invalid environment without initiating HTTP transaction", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "staging",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain("Invalid PADDLE_ENVIRONMENT");
+      });
+    });
+
+    describe("Requirement 4: No API key appears in responses", () => {
+      it("does not leak API key in 200 success response", async () => {
+        const mockFetch: typeof fetch = async () => {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: "txn_001",
+                checkout: { url: "https://sandbox-checkout.paddle.com/checkout/txn_001" },
+              },
+            }),
+            { status: 200 }
+          );
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        const bodyStr = JSON.stringify(res.body);
+        expect(bodyStr).not.toContain(SANDBOX_KEY);
+        expect(bodyStr).not.toContain("pdl_");
+      });
+
+      it("does not leak API key in 502 upstream error response", async () => {
+        const mockFetch: typeof fetch = async () => {
+          // Paddle upstream error response potentially returning details
+          return new Response(
+            JSON.stringify({
+              error: {
+                type: "authentication_error",
+                message: `Invalid key ${SANDBOX_KEY}`,
+              },
+            }),
+            { status: 401 }
+          );
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(res.status).toBe(502);
+        const bodyStr = JSON.stringify(res.body);
+        expect(bodyStr).not.toContain(SANDBOX_KEY);
+        expect(bodyStr).not.toContain("authentication_error");
+        expect(res.body.error).toBe("Failed to create checkout");
+      });
+
+      it("does not leak API key in 500 configuration or network error responses", async () => {
+        // Network throw
+        const mockFetch: typeof fetch = async () => {
+          throw new Error(`Failed to connect with secret ${SANDBOX_KEY}`);
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(res.status).toBe(500);
+        const bodyStr = JSON.stringify(res.body);
+        expect(bodyStr).not.toContain(SANDBOX_KEY);
+        expect(res.body.error).toBe("Internal server error");
+      });
+    });
+
+    describe("Requirement 5: Missing Paddle credentials do not initiate a transaction", () => {
+      it("rejects missing apiKey without invoking fetch", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: undefined,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe("Payment configuration missing");
+      });
+
+      it("rejects missing priceId without invoking fetch", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: undefined,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe("Payment configuration missing");
+      });
+
+      it("rejects mixed credentials (live key in sandbox) without invoking fetch", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: LIVE_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain("Live Paddle API key cannot be used in sandbox");
+      });
+
+      it("rejects mixed credentials (sandbox key in live) without invoking fetch", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "live",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain("Sandbox Paddle API key cannot be used in live");
+      });
+
+      it("rejects non-UUID userId without invoking fetch", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: "malicious-user-id-not-uuid",
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(401);
+        expect(res.body.error).toBe("Unauthorized");
+      });
+    });
+  });
 });
+

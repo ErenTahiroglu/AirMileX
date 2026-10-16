@@ -393,3 +393,174 @@ export async function processPaddleWebhookRequest(
     };
   }
 }
+
+export type PaddleEnvironment = "sandbox" | "live";
+
+export const PADDLE_API_HOSTS: Record<PaddleEnvironment, string> = {
+  sandbox: "https://sandbox-api.paddle.com",
+  live: "https://api.paddle.com",
+};
+
+export type ResolvePaddleHostResult =
+  | { ok: true; host: string; environment: PaddleEnvironment }
+  | { ok: false; error: string };
+
+/**
+ * Resolves the Paddle API base URL from the configured environment.
+ * Rejects missing, unknown, or ambiguous environment strings (fails closed).
+ */
+export function resolvePaddleApiHost(
+  environment: string | null | undefined
+): ResolvePaddleHostResult {
+  if (!environment || typeof environment !== "string") {
+    return { ok: false, error: "PADDLE_ENVIRONMENT configuration missing" };
+  }
+
+  const normalized = environment.trim().toLowerCase();
+  if (normalized === "sandbox") {
+    return { ok: true, host: PADDLE_API_HOSTS.sandbox, environment: "sandbox" };
+  }
+  if (normalized === "live" || normalized === "production") {
+    return { ok: true, host: PADDLE_API_HOSTS.live, environment: "live" };
+  }
+
+  return {
+    ok: false,
+    error: `Invalid PADDLE_ENVIRONMENT: '${environment}'. Must be 'sandbox' or 'live'`,
+  };
+}
+
+/**
+ * Validates that Paddle API credentials match the configured environment.
+ * Prevents accidental use of live keys against sandbox endpoints or sandbox keys against live endpoints.
+ */
+export function validatePaddleCredentials(
+  environment: PaddleEnvironment,
+  apiKey: string | null | undefined
+): { valid: boolean; error?: string } {
+  if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+    return { valid: false, error: "Payment configuration missing" };
+  }
+  const trimmed = apiKey.trim();
+  if (environment === "sandbox" && trimmed.startsWith("pdl_live_")) {
+    return { valid: false, error: "Live Paddle API key cannot be used in sandbox environment" };
+  }
+  if (environment === "live" && trimmed.startsWith("pdl_sdb_")) {
+    return { valid: false, error: "Sandbox Paddle API key cannot be used in live environment" };
+  }
+  return { valid: true };
+}
+
+export interface CreatePaddleCheckoutParams {
+  environment: string | null | undefined;
+  apiKey: string | null | undefined;
+  priceId: string | null | undefined;
+  userId: string | null | undefined;
+  fetchFn?: typeof fetch;
+}
+
+export interface PaddleCheckoutResult {
+  status: number;
+  body: {
+    transaction_id?: string;
+    checkout_url?: string;
+    error?: string;
+  };
+}
+
+/**
+ * Creates a Paddle Billing checkout transaction session.
+ * Enforces explicit environment selection, fail-closed validation, and credential security.
+ */
+export async function createPaddleCheckoutTransaction(
+  params: CreatePaddleCheckoutParams
+): Promise<PaddleCheckoutResult> {
+  // Validate user ID format
+  if (!params.userId || typeof params.userId !== "string" || !UUID_REGEX.test(params.userId.trim())) {
+    return {
+      status: 401,
+      body: { error: "Unauthorized" },
+    };
+  }
+
+  // Validate environment (fail closed)
+  const hostRes = resolvePaddleApiHost(params.environment);
+  if (!hostRes.ok) {
+    return {
+      status: 500,
+      body: { error: hostRes.error },
+    };
+  }
+
+  // Validate price ID and API key presence
+  if (
+    !params.apiKey ||
+    typeof params.apiKey !== "string" ||
+    !params.apiKey.trim() ||
+    !params.priceId ||
+    typeof params.priceId !== "string" ||
+    !params.priceId.trim()
+  ) {
+    return {
+      status: 500,
+      body: { error: "Payment configuration missing" },
+    };
+  }
+
+  // Validate credentials environment pairing
+  const credRes = validatePaddleCredentials(hostRes.environment, params.apiKey);
+  if (!credRes.valid) {
+    return {
+      status: 500,
+      body: { error: credRes.error ?? "Invalid payment credentials" },
+    };
+  }
+
+  const endpoint = `${hostRes.host}/transactions`;
+  const fetcher = params.fetchFn ?? fetch;
+
+  try {
+    const response = await fetcher(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey.trim()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        items: [{ price_id: params.priceId.trim(), quantity: 1 }],
+        custom_data: { user_id: params.userId.trim() },
+      }),
+    });
+
+    let result: any = null;
+    try {
+      result = await response.json();
+    } catch {
+      // response wasn't valid JSON
+    }
+
+    if (!response.ok) {
+      console.error(
+        `Paddle API transaction creation failed with HTTP ${response.status}`
+      );
+      return {
+        status: 502,
+        body: { error: "Failed to create checkout" },
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        transaction_id: result?.data?.id,
+        checkout_url: result?.data?.checkout?.url,
+      },
+    };
+  } catch (err: any) {
+    console.error("Network or unexpected error creating Paddle checkout transaction:", err?.message ?? String(err));
+    return {
+      status: 500,
+      body: { error: "Internal server error" },
+    };
+  }
+}

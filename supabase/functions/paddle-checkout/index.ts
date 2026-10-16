@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.100.1";
+import { createPaddleCheckoutTransaction } from "../_shared/paddle.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -20,9 +21,19 @@ Deno.serve(async (req) => {
       );
     }
 
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error("paddle-checkout: Missing SUPABASE_URL or SUPABASE_ANON_KEY");
+      return new Response(
+        JSON.stringify({ error: "Server misconfigured: database credentials missing" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
+      supabaseUrl,
+      supabaseAnonKey,
       { global: { headers: { Authorization: authHeader } } }
     );
 
@@ -37,45 +48,17 @@ Deno.serve(async (req) => {
 
     const userId = claimsData.claims.sub;
 
-    const paddleApiKey = Deno.env.get("PADDLE_API_KEY");
-    const paddlePriceId = Deno.env.get("PADDLE_PRICE_ID");
-
-    if (!paddleApiKey || !paddlePriceId) {
-      return new Response(
-        JSON.stringify({ error: "Payment configuration missing" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const response = await fetch("https://api.paddle.com/transactions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${paddleApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        items: [{ price_id: paddlePriceId, quantity: 1 }],
-        custom_data: { user_id: userId },
-      }),
+    const result = await createPaddleCheckoutTransaction({
+      environment: Deno.env.get("PADDLE_ENVIRONMENT"),
+      apiKey: Deno.env.get("PADDLE_API_KEY"),
+      priceId: Deno.env.get("PADDLE_PRICE_ID"),
+      userId,
     });
 
-    const result = await response.json();
-
-    if (!response.ok) {
-      console.error("Paddle API error:", JSON.stringify(result));
-      return new Response(
-        JSON.stringify({ error: "Failed to create checkout" }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    return new Response(
-      JSON.stringify({
-        transaction_id: result.data?.id,
-        checkout_url: result.data?.checkout?.url,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (err) {
     console.error("paddle-checkout error:", err);
     return new Response(
@@ -84,3 +67,4 @@ Deno.serve(async (req) => {
     );
   }
 });
+
