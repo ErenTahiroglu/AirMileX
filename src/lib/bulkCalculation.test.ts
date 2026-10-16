@@ -412,7 +412,7 @@ describe("AirMileX Phase 2B: Bulk Distance Calculation Orchestrator", () => {
     expect(result.refundErrors).toContain("Refund RPC failed");
   });
 
-  it("13. Task B2: formatCalculationNotification surfaces refund errors explicitly and never falsely claims failed rows were refunded", () => {
+  it("13. Task B2: formatCalculationNotification surfaces refund errors explicitly and uses neutral wording without unconfirmed refund claims", () => {
     // Case A: Calculation has refund error -> destructive variant, explicit refund failure warning
     const notifWithError = formatCalculationNotification(
       { total: 5, ok: 3, error: 2, indeterminate: 0, skippedEmpty: 0 },
@@ -423,23 +423,23 @@ describe("AirMileX Phase 2B: Bulk Distance Calculation Orchestrator", () => {
     expect(notifWithError.description).toContain("automatic credit refund failed (Refund RPC failed for 2 credits)");
     expect(notifWithError.description).not.toContain("credits refunded");
 
-    // Case B: Calculation has errors but NO refund error -> confirmed refund stated
-    const notifRefunded = formatCalculationNotification(
+    // Case B: Calculation has errors but NO refund error -> neutral wording, no unconfirmed refund claim
+    const notifErrors = formatCalculationNotification(
       { total: 5, ok: 3, error: 2, indeterminate: 0, skippedEmpty: 0 },
       []
     );
-    expect(notifRefunded.variant).toBe("default");
-    expect(notifRefunded.title).toBe("Calculation completed");
-    expect(notifRefunded.description).toContain("3 succeeded");
-    expect(notifRefunded.description).toContain("2 failed (credits refunded)");
+    expect(notifErrors.variant).toBe("default");
+    expect(notifErrors.title).toBe("Calculation completed");
+    expect(notifErrors.description).toBe("3 succeeded, 2 failed.");
+    expect(notifErrors.description).not.toContain("refunded");
 
-    // Case C: Calculation has indeterminate rows -> explicitly states not refunded
+    // Case C: Calculation has indeterminate rows -> neutral wording, no unconfirmed refund claim
     const notifIndet = formatCalculationNotification(
       { total: 5, ok: 3, error: 0, indeterminate: 2, skippedEmpty: 0 },
       []
     );
-    expect(notifIndet.description).toContain("2 indeterminate (not refunded)");
-    expect(notifIndet.description).not.toContain("credits refunded");
+    expect(notifIndet.description).toBe("3 succeeded, 2 indeterminate.");
+    expect(notifIndet.description).not.toContain("refunded");
   });
 });
 

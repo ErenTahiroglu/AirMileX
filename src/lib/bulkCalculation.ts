@@ -117,7 +117,9 @@ export function partitionRecordsForContinuation<T extends { id: string }>(
 
 /**
  * Formats user-facing calculation notification without falsely claiming failed rows
- * were refunded unless confirmed by the server.
+ * were refunded without explicit confirmation.
+ * Uses neutral wording for failed and indeterminate records, while preserving
+ * explicit warnings when the server reports a refund error.
  */
 export function formatCalculationNotification(
   summary: BulkCalculationSummary,
@@ -137,10 +139,10 @@ export function formatCalculationNotification(
 
   const parts: string[] = [`${summary.ok} succeeded`];
   if (summary.error > 0) {
-    parts.push(`${summary.error} failed (credits refunded)`);
+    parts.push(`${summary.error} failed`);
   }
   if (summary.indeterminate > 0) {
-    parts.push(`${summary.indeterminate} indeterminate (not refunded)`);
+    parts.push(`${summary.indeterminate} indeterminate`);
   }
 
   return {
