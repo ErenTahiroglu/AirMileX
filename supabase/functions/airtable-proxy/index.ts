@@ -8,9 +8,14 @@ import {
 } from "../_shared/airtable-sync.ts";
 import {
   AirtableInputError,
+  AirtablePaginationError,
   PatchError,
   buildBlankFieldFormula,
   clampPreviewLimit,
+  isInvalidOffsetError,
+  isQuotaLimitError,
+  paginateAirtableRecords,
+  projectMappedFields,
   syncWithBatching,
   type PatchRecord,
 } from "../_shared/airtable-records.ts";
@@ -35,7 +40,11 @@ async function airtableFetch(url: string, pat: string, options: RequestInit = {}
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new PatchError(`Airtable ${res.status}: ${body}`, res.status);
+    const isQuota = isQuotaLimitError(res.status, body);
+    const isInvalidOffset = isInvalidOffsetError(res.status, body);
+    const err = new AirtablePaginationError(`Airtable ${res.status}: ${body}`, res.status, isQuota, isInvalidOffset);
+    err.headers = res.headers;
+    throw err;
   }
   return res.json();
 }
@@ -126,6 +135,83 @@ serve(async (req) => {
         break;
       }
 
+      case "read-all-records": {
+        if (typeof baseId !== "string" || typeof tableId !== "string" || !baseId || !tableId) {
+          throw new AirtableInputError("Missing params");
+        }
+
+        // 1. Fetch live table metadata to verify table and resolve field names
+        const meta = await airtableFetch(`${AIRTABLE_META}/bases/${encodeURIComponent(baseId)}/tables`, pat) as {
+          tables?: Array<{ id: string; fields: Array<{ id: string; name: string }> }>;
+        };
+        const table = meta.tables?.find((t) => t.id === tableId);
+        if (!table) throw new AirtableInputError("Table not found in this base.");
+
+        // 2. Build blank distance formula using verified distance field
+        const formula = buildBlankFieldFormula(distanceFieldId, table.fields);
+
+        // 3. Resolve caller's saved column mapping for this table to project only mapped fields
+        const { data: mapping } = await getServiceClient()
+          .from("saved_mappings")
+          .select("table_id, start_col_id, end_col_id, distance_col_id, cost_col_id, status_col_id, notes_col_id, purpose_col_id")
+          .eq("user_id", userId)
+          .eq("table_id", tableId)
+          .maybeSingle();
+
+        const mappedColIds = new Set<string>();
+        if (mapping) {
+          if (mapping.start_col_id) mappedColIds.add(mapping.start_col_id);
+          if (mapping.end_col_id) mappedColIds.add(mapping.end_col_id);
+          if (mapping.distance_col_id) mappedColIds.add(mapping.distance_col_id);
+          if (mapping.cost_col_id) mappedColIds.add(mapping.cost_col_id);
+          if (mapping.status_col_id) mappedColIds.add(mapping.status_col_id);
+          if (mapping.notes_col_id) mappedColIds.add(mapping.notes_col_id);
+          if (mapping.purpose_col_id) mappedColIds.add(mapping.purpose_col_id);
+        }
+        if (typeof distanceFieldId === "string" && distanceFieldId) {
+          mappedColIds.add(distanceFieldId);
+        }
+
+        const allowedFieldNames = new Set<string>();
+        for (const f of table.fields) {
+          if (mappedColIds.has(f.id)) {
+            allowedFieldNames.add(f.name);
+          }
+        }
+
+        const maxRecordsToFetch = Math.min(
+          Math.max(typeof body.maxRecords === "number" && Number.isFinite(body.maxRecords) ? Math.floor(body.maxRecords) : 500, 1),
+          500
+        );
+
+        // 4. Bounded pagination up to 500 records
+        const paginated = await paginateAirtableRecords(
+          async (offset) => {
+            let pageUrl = `${AIRTABLE_API}/${encodeURIComponent(baseId)}/${encodeURIComponent(tableId)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`;
+            if (offset) {
+              pageUrl += `&offset=${encodeURIComponent(offset)}`;
+            }
+            return await airtableFetch(pageUrl, pat);
+          },
+          { maxRecords: maxRecordsToFetch }
+        );
+
+        // 5. Whitelist fields preserving field-name-keyed structure
+        const projectedRecords = allowedFieldNames.size > 0
+          ? projectMappedFields(paginated.records, allowedFieldNames)
+          : paginated.records;
+
+        result = {
+          records: projectedRecords,
+          total: paginated.total,
+          limitReached: paginated.limitReached,
+          exhausted: paginated.exhausted,
+          pageCount: paginated.pageCount,
+          offset: paginated.offset,
+        };
+        break;
+      }
+
       case "sync-records": {
         if (typeof baseId !== "string" || typeof tableId !== "string" || !Array.isArray(records) || !records.length) {
           throw new Error("Missing sync params");
@@ -185,7 +271,14 @@ serve(async (req) => {
     });
   } catch (err) {
     const message = (err as Error).message;
-    const status = message === "Unauthorized" ? 401 : err instanceof SyncAuthorizationError ? 403 : err instanceof PatchError ? 502 : 400;
+    const status =
+      message === "Unauthorized"
+        ? 401
+        : err instanceof SyncAuthorizationError
+        ? 403
+        : err instanceof AirtablePaginationError || err instanceof PatchError
+        ? (err.status && err.status >= 400 && err.status < 600 ? err.status : 502)
+        : 400;
     return new Response(JSON.stringify({ error: message }), {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

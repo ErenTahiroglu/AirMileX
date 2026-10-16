@@ -271,3 +271,86 @@ describe("airtable synchronization service", () => {
     expect(res.indeterminateIds).toEqual(records.map((r) => r.id));
   });
 });
+
+describe("airtable record retrieval & pagination service", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (supabase.auth.getSession as any).mockResolvedValue({
+      data: {
+        session: { user: { id: "usr1" } } as unknown as any,
+      },
+      error: null,
+    });
+  });
+
+  it("5-record preview calls read-records with limit 5", async () => {
+    const { readRecords } = await import("./airtable");
+    (supabase.functions.invoke as any).mockResolvedValue({
+      data: { records: [{ id: "rec1", fields: {} }] },
+      error: null,
+    });
+
+    const res = await readRecords("appBase1", "tblA", "fldDist", 5);
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("airtable-proxy", {
+      body: {
+        action: "read-records",
+        baseId: "appBase1",
+        tableId: "tblA",
+        distanceFieldId: "fldDist",
+        limit: 5,
+      },
+    });
+    expect(res.records.length).toBe(1);
+  });
+
+  it("readEligibleRecords calls read-all-records with up to 500 maxRecords", async () => {
+    const { readEligibleRecords } = await import("./airtable");
+    (supabase.functions.invoke as any).mockResolvedValue({
+      data: {
+        records: Array.from({ length: 150 }, (_, i) => ({ id: `rec${i}`, fields: {} })),
+        total: 150,
+        limitReached: false,
+        exhausted: true,
+        pageCount: 2,
+      },
+      error: null,
+    });
+
+    const res = await readEligibleRecords("appBase1", "tblA", "fldDist", 500);
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("airtable-proxy", {
+      body: {
+        action: "read-all-records",
+        baseId: "appBase1",
+        tableId: "tblA",
+        distanceFieldId: "fldDist",
+        maxRecords: 500,
+      },
+    });
+    expect(res.records.length).toBe(150);
+    expect(res.total).toBe(150);
+    expect(res.exhausted).toBe(true);
+    expect(res.limitReached).toBe(false);
+  });
+
+  it("rejects when user is not authenticated", async () => {
+    const { readEligibleRecords } = await import("./airtable");
+    (supabase.auth.getSession as any).mockResolvedValue({
+      data: { session: null },
+      error: null,
+    });
+
+    await expect(readEligibleRecords("appBase1", "tblA", "fldDist")).rejects.toThrow("Not authenticated");
+  });
+
+  it("surfaces errors returned by airtable-proxy invocation", async () => {
+    const { readEligibleRecords } = await import("./airtable");
+    (supabase.functions.invoke as any).mockResolvedValue({
+      data: null,
+      error: { message: "Airtable 422: The requested offset has expired" },
+    });
+
+    await expect(readEligibleRecords("appBase1", "tblA", "fldDist")).rejects.toThrow("The requested offset has expired");
+  });
+});
