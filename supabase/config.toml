@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.quick-distance]
 verify_jwt = false
+
+[functions.address-autocomplete]
+verify_jwt = false

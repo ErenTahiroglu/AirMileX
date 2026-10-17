@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   computeHmacSha256Hex,
   createPaddleCheckoutTransaction,
@@ -569,9 +569,8 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
 
   describe("AirMileX Phase 5A: Paddle Checkout Environment Selection & Security", () => {
     const VALID_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
-    const SANDBOX_KEY = "pdl_sdb_apikey_99887766554433221100";
-    const LIVE_KEY = "pdl_live_apikey_11223344556677889900";
-    const GENERIC_KEY = "pdl_apikey_test_generic_secret_value";
+    const SANDBOX_KEY = "pdl_sdbx_apikey_99887766554433221100aabbccddeeff";
+    const LIVE_KEY = "pdl_live_apikey_11223344556677889900aabbccddeeff";
     const PRICE_ID = "pri_01h8444a7qzp7k7pkv1k8cgn";
 
     describe("Environment Host Resolution & Validation", () => {
@@ -645,7 +644,15 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
       });
     });
 
-    describe("Credential Pairing & Credential Isolation", () => {
+    describe("Credential Pairing, Official Format & Credential Isolation", () => {
+      it("validates official modern sandbox key prefix (pdl_sdbx_apikey_)", () => {
+        expect(validatePaddleCredentials("sandbox", SANDBOX_KEY).valid).toBe(true);
+      });
+
+      it("validates official modern live key prefix (pdl_live_apikey_)", () => {
+        expect(validatePaddleCredentials("live", LIVE_KEY).valid).toBe(true);
+      });
+
       it("rejects live API key when environment is sandbox", () => {
         const res = validatePaddleCredentials("sandbox", LIVE_KEY);
         expect(res.valid).toBe(false);
@@ -658,11 +665,26 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         expect(res.error).toContain("Sandbox Paddle API key cannot be used in live");
       });
 
-      it("allows appropriately paired credentials", () => {
-        expect(validatePaddleCredentials("sandbox", SANDBOX_KEY).valid).toBe(true);
-        expect(validatePaddleCredentials("live", LIVE_KEY).valid).toBe(true);
-        expect(validatePaddleCredentials("sandbox", GENERIC_KEY).valid).toBe(true);
-        expect(validatePaddleCredentials("live", GENERIC_KEY).valid).toBe(true);
+      it("rejects outdated or incorrect pdl_sdb_ prefix in sandbox", () => {
+        const res = validatePaddleCredentials("sandbox", "pdl_sdb_apikey_99887766554433221100");
+        expect(res.valid).toBe(false);
+        expect(res.error).toContain("Invalid Paddle sandbox API key format: must begin with 'pdl_sdbx_apikey_'");
+      });
+
+      it("rejects unexpected or generic formats without documented prefix", () => {
+        const res1 = validatePaddleCredentials("sandbox", "pdl_apikey_generic_1234567890");
+        expect(res1.valid).toBe(false);
+        expect(res1.error).toContain("must begin with 'pdl_sdbx_apikey_'");
+
+        const res2 = validatePaddleCredentials("live", "pdl_apikey_generic_1234567890");
+        expect(res2.valid).toBe(false);
+        expect(res2.error).toContain("must begin with 'pdl_live_apikey_'");
+      });
+
+      it("rejects keys that are too short or contain invalid characters", () => {
+        const resShort = validatePaddleCredentials("sandbox", "pdl_sdbx_apikey_short");
+        expect(resShort.valid).toBe(false);
+        expect(resShort.error).toContain("Malformed Paddle sandbox API key");
       });
     });
 
@@ -853,6 +875,40 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         const bodyStr = JSON.stringify(res.body);
         expect(bodyStr).not.toContain(SANDBOX_KEY);
         expect(res.body.error).toBe("Internal server error");
+      });
+
+      it("regression test: never leaks raw exception messages or API keys into console.error or response", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const secretToProtect = "pdl_sdbx_apikey_SECRET_CANARY_VALUE_1234567890abcdef";
+
+        const mockFetch: typeof fetch = async () => {
+          throw new Error(`Fatal connection failure using Bearer ${secretToProtect}`);
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: secretToProtect,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe("Internal server error");
+
+        // Verify response contains no secret
+        const bodyStr = JSON.stringify(res.body);
+        expect(bodyStr).not.toContain(secretToProtect);
+        expect(bodyStr).not.toContain("SECRET_CANARY");
+        expect(bodyStr).not.toContain("Bearer");
+
+        // Verify console.error contains no secret
+        const loggedCalls = errorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+        expect(loggedCalls).not.toContain(secretToProtect);
+        expect(loggedCalls).not.toContain("SECRET_CANARY");
+        expect(loggedCalls).not.toContain("Bearer");
+
+        errorSpy.mockRestore();
       });
     });
 

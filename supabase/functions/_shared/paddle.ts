@@ -431,9 +431,18 @@ export function resolvePaddleApiHost(
 }
 
 /**
- * Validates that Paddle API credentials match the configured environment.
- * Prevents accidental use of live keys against sandbox endpoints or sandbox keys against live endpoints.
+ * Validates that Paddle API credentials match the configured environment and official key format.
+ * Official Paddle Billing modern keys:
+ * - Sandbox: pdl_sdbx_apikey_...
+ * - Live: pdl_live_apikey_...
  */
+const PADDLE_SANDBOX_KEY_PREFIX = "pdl_sdbx_apikey_";
+const PADDLE_LIVE_KEY_PREFIX = "pdl_live_apikey_";
+const PADDLE_KEY_REGEX = {
+  sandbox: /^pdl_sdbx_apikey_[a-zA-Z0-9_-]{10,}$/,
+  live: /^pdl_live_apikey_[a-zA-Z0-9_-]{10,}$/,
+};
+
 export function validatePaddleCredentials(
   environment: PaddleEnvironment,
   apiKey: string | null | undefined
@@ -442,13 +451,46 @@ export function validatePaddleCredentials(
     return { valid: false, error: "Payment configuration missing" };
   }
   const trimmed = apiKey.trim();
-  if (environment === "sandbox" && trimmed.startsWith("pdl_live_")) {
-    return { valid: false, error: "Live Paddle API key cannot be used in sandbox environment" };
+
+  if (environment === "sandbox") {
+    if (trimmed.startsWith("pdl_live_")) {
+      return { valid: false, error: "Live Paddle API key cannot be used in sandbox environment" };
+    }
+    if (!trimmed.startsWith(PADDLE_SANDBOX_KEY_PREFIX)) {
+      return {
+        valid: false,
+        error: `Invalid Paddle sandbox API key format: must begin with '${PADDLE_SANDBOX_KEY_PREFIX}'`,
+      };
+    }
+    if (!PADDLE_KEY_REGEX.sandbox.test(trimmed)) {
+      return {
+        valid: false,
+        error: "Malformed Paddle sandbox API key: invalid characters or length",
+      };
+    }
+    return { valid: true };
   }
-  if (environment === "live" && trimmed.startsWith("pdl_sdb_")) {
-    return { valid: false, error: "Sandbox Paddle API key cannot be used in live environment" };
+
+  if (environment === "live") {
+    if (trimmed.startsWith("pdl_sdbx_") || trimmed.startsWith("pdl_sdb_")) {
+      return { valid: false, error: "Sandbox Paddle API key cannot be used in live environment" };
+    }
+    if (!trimmed.startsWith(PADDLE_LIVE_KEY_PREFIX)) {
+      return {
+        valid: false,
+        error: `Invalid Paddle live API key format: must begin with '${PADDLE_LIVE_KEY_PREFIX}'`,
+      };
+    }
+    if (!PADDLE_KEY_REGEX.live.test(trimmed)) {
+      return {
+        valid: false,
+        error: "Malformed Paddle live API key: invalid characters or length",
+      };
+    }
+    return { valid: true };
   }
-  return { valid: true };
+
+  return { valid: false, error: "Invalid payment environment" };
 }
 
 export interface CreatePaddleCheckoutParams {
@@ -556,8 +598,10 @@ export async function createPaddleCheckoutTransaction(
         checkout_url: result?.data?.checkout?.url,
       },
     };
-  } catch (err: any) {
-    console.error("Network or unexpected error creating Paddle checkout transaction:", err?.message ?? String(err));
+  } catch (err: unknown) {
+    // Sanitize: never log raw error messages or objects that could contain credentials/headers
+    const errorType = err instanceof Error ? err.name : "UnknownError";
+    console.error(`Paddle checkout transaction request failed (${errorType})`);
     return {
       status: 500,
       body: { error: "Internal server error" },

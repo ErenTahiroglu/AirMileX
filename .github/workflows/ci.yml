@@ -1,15 +1,83 @@
 name: CI
+
 on:
   push:
+    branches: [main, development]
   pull_request:
+    branches: [main, development]
+
 jobs:
-  verify:
+  unit-types-build:
+    name: Unit Tests, Types & Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      # Checks resolved lockfile versions against known advisories
-      - run: curl -sSfL https://github.com/google/osv-scanner/releases/download/v2.2.2/osv-scanner_linux_amd64 -o osv && chmod +x osv && ./osv scan source --lockfile=bun.lock
-      - run: bunx vitest run
-      - run: bun run build
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run unit tests
+        run: bun test
+      - name: TypeScript check
+        run: bunx tsc --noEmit -p tsconfig.app.json
+      - name: Production build
+        run: bun run build
+
+  security-scan:
+    name: Dependency Vulnerability Scan (OSV)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Scan dependencies with OSV Scanner
+        run: curl -sSfL https://github.com/google/osv-scanner/releases/download/v2.2.2/osv-scanner_linux_amd64 -o osv && chmod +x osv && ./osv scan source --lockfile=bun.lock
+
+  browser-e2e:
+    name: Playwright Browser E2E (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build frontend for preview
+        run: bun run build
+      - name: Install Playwright Chromium & system dependencies
+        run: bunx playwright install --with-deps chromium
+      - name: Run Playwright E2E tests
+        run: bun run test:e2e
+        env:
+          CI: true
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+  database-integration:
+    name: Local PostgreSQL Financial & Database Invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start isolated ephemeral local Supabase database
+        run: supabase start
+      - name: Execute real PostgreSQL financial & integration test suite
+        run: bun run test:integration
+        env:
+          CI: true
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Stop ephemeral local Supabase stack
+        if: always()
+        run: supabase stop --no-backup

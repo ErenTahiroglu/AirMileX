@@ -59,8 +59,9 @@ Deno.serve(async (req) => {
       status: result.status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    console.error("paddle-checkout error:", err);
+  } catch (err: unknown) {
+    const errorType = err instanceof Error ? err.name : "UnknownError";
+    console.error(`paddle-checkout handler failed (${errorType})`);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
