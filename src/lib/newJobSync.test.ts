@@ -13,17 +13,18 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 describe("newJobSync orchestrator", () => {
   let params: ExecuteJobSyncParams;
-  let mockUpsertMapping: ReturnType<typeof vi.fn>;
-  let mockSyncRecords: ReturnType<typeof vi.fn>;
-  let mockInsertLog: ReturnType<typeof vi.fn>;
-  let mockSetSyncing: ReturnType<typeof vi.fn>;
-  let mockSetMappingStatus: ReturnType<typeof vi.fn>;
-  let mockSetMappingError: ReturnType<typeof vi.fn>;
-  let mockSetSyncProgress: ReturnType<typeof vi.fn>;
-  let mockSetFailedSyncIds: ReturnType<typeof vi.fn>;
-  let mockSetSyncedCount: ReturnType<typeof vi.fn>;
-  let mockSetShowSummary: ReturnType<typeof vi.fn>;
-  let mockToast: ReturnType<typeof vi.fn>;
+  let mockUpsertMapping: any;
+  let mockSyncRecords: any;
+  let mockInsertLog: any;
+  let mockSetSyncing: any;
+  let mockSetMappingStatus: any;
+  let mockSetMappingError: any;
+  let mockSetSyncProgress: any;
+  let mockSetConfirmedSyncIds: any;
+  let mockSetFailedSyncIds: any;
+  let mockSetSyncedCount: any;
+  let mockSetShowSummary: any;
+  let mockToast: any;
 
   const sampleDistances: DistanceResult[] = [
     { record_id: "rec1", distance_km: 16.09, distance_mi: 10, status: "ok" },
@@ -81,8 +82,6 @@ describe("newJobSync orchestrator", () => {
       toast: mockToast,
     };
   });
-
-  let mockSetConfirmedSyncIds: ReturnType<typeof vi.fn>;
 
   it("1. Full success: confirms persistence, syncs all records, logs audit, and notifies success", async () => {
     const successResult: SyncResult = {
