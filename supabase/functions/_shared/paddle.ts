@@ -1,5 +1,6 @@
 // Shared paddle webhook validation and signature verification module
 // Adheres strictly to Paddle Billing webhook standards
+import { sanitizeErrorMessage } from "./account-deletion.ts";
 
 export interface VerifySignatureOptions {
   toleranceSeconds?: number;
@@ -255,7 +256,7 @@ export function validatePaddleWebhookPayload(
     return {
       action: "error",
       status: 400,
-      reason: `Invalid or missing user_id in transaction custom_data: '${userId}'`,
+      reason: "Invalid or missing user_id in transaction custom_data",
     };
   }
 
@@ -363,12 +364,13 @@ export async function processPaddleWebhookRequest(
     });
 
     if (error || !data) {
-      console.error("fulfill_paddle_credits RPC failure:", error);
+      const sanitizedErr = sanitizeErrorMessage(error?.message ?? "Unknown database error");
+      console.error("fulfill_paddle_credits RPC failure:", sanitizedErr);
       return {
         status: 500,
         body: {
           error: "Credit fulfillment database failure",
-          details: error?.message ?? "Unknown database error",
+          category: "fulfillment_database_failure",
         },
       };
     }
@@ -383,12 +385,13 @@ export async function processPaddleWebhookRequest(
       },
     };
   } catch (err: any) {
-    console.error("Unexpected error in fulfillRpc call:", err);
+    const sanitizedErr = sanitizeErrorMessage(err?.message ?? String(err));
+    console.error("Unexpected error in fulfillRpc call:", sanitizedErr);
     return {
       status: 500,
       body: {
         error: "Internal error during fulfillment",
-        details: err?.message ?? String(err),
+        category: "internal_error",
       },
     };
   }

@@ -642,6 +642,63 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
 
       await cleanupTestUser(db, userId);
     });
+
+    itWithDb("legacy deduct_credits rejects negative and zero amounts, preventing balance inflation", async (db) => {
+      const userId = crypto.randomUUID();
+      await createTestUser(db, userId);
+
+      await db`SET ROLE service_role`;
+
+      // Negative deduction must be rejected
+      let negativeFailed = false;
+      try {
+        await db`SELECT public.deduct_credits(${userId}, -20)`;
+      } catch (err: any) {
+        negativeFailed = true;
+        expect(err.message).toContain("Deduction amount must be strictly positive");
+      }
+      expect(negativeFailed).toBe(true);
+
+      // Balance must NOT have inflated from 50 to 70
+      const [rowAfterNeg] = await db`SELECT credits FROM public.user_settings WHERE id = ${userId}`;
+      expect(rowAfterNeg.credits).toBe(50);
+
+      // Zero deduction must be rejected
+      let zeroFailed = false;
+      try {
+        await db`SELECT public.deduct_credits(${userId}, 0)`;
+      } catch (err: any) {
+        zeroFailed = true;
+        expect(err.message).toContain("Deduction amount must be strictly positive");
+      }
+      expect(zeroFailed).toBe(true);
+
+      // Null deduction must be rejected
+      let nullFailed = false;
+      try {
+        await db`SELECT public.deduct_credits(${userId}, null)`;
+      } catch (err: any) {
+        nullFailed = true;
+        expect(err.message).toContain("Deduction amount must be strictly positive");
+      }
+      expect(nullFailed).toBe(true);
+
+      await cleanupTestUser(db, userId);
+    });
+
+    itWithDb("legacy deduct_credits with valid positive amount decreases balance accurately", async (db) => {
+      const userId = crypto.randomUUID();
+      await createTestUser(db, userId);
+
+      await db`SET ROLE service_role`;
+      const [res] = await db`SELECT public.deduct_credits(${userId}, 15) as new_balance`;
+      expect(res.new_balance).toBe(35);
+
+      const [row] = await db`SELECT credits FROM public.user_settings WHERE id = ${userId}`;
+      expect(row.credits).toBe(35);
+
+      await cleanupTestUser(db, userId);
+    });
   });
 
   // =========================================================================
@@ -775,6 +832,15 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
           authReserveBlocked = true;
         }
         expect(authReserveBlocked).toBe(true);
+
+        // Attempt deduct_credits as authenticated
+        let authDeductBlocked = false;
+        try {
+          await db`SELECT public.deduct_credits(${userId}, 10)`;
+        } catch (err: any) {
+          authDeductBlocked = true;
+        }
+        expect(authDeductBlocked).toBe(true);
       } finally {
         await db`SET ROLE postgres`;
         await cleanupTestUser(db, userId);

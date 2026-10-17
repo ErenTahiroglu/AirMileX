@@ -218,7 +218,9 @@ describe("AirMileX Phase 5B-R4: Account Deletion Step-Up & Safety Invariants", (
 
     // Verify 500 response
     expect(res.status).toBe(500);
-    expect(res.body.error).toBe("Auth service unavailable");
+    expect(res.body.error).toBe("Failed to delete account from authentication service");
+    expect(res.body.category).toBe("auth_deletion_failure");
+    expect(JSON.stringify(res.body)).not.toContain("Auth service unavailable");
 
     // CRITICAL: Financial, address & user data was NOT deleted
     expect(userSettingsDeleted).toBe(false);
@@ -296,7 +298,9 @@ describe("AirMileX Phase 5B-R4: Account Deletion Step-Up & Safety Invariants", (
 
     // Must NOT return 200 success
     expect(res.status).toBe(500);
-    expect(String(res.body.error)).toContain("saved_address_pairs: Address pairs table locked");
+    expect(res.body.error).toBe("Account deleted, but some associated data could not be removed");
+    expect(res.body.category).toBe("cleanup_partial_failure");
+    expect(JSON.stringify(res.body)).not.toContain("Address pairs table locked");
     expect(loggedStatus).toBe("partial_failure");
     expect(loggedError).toContain("Account deleted from Auth, but cleanup failed");
   });
@@ -321,7 +325,9 @@ describe("AirMileX Phase 5B-R4: Account Deletion Step-Up & Safety Invariants", (
 
     // Must NOT return 200 success
     expect(res.status).toBe(500);
-    expect(String(res.body.error)).toContain("saved_mappings: Foreign key lock timeout");
+    expect(res.body.error).toBe("Account deleted, but some associated data could not be removed");
+    expect(res.body.category).toBe("cleanup_partial_failure");
+    expect(JSON.stringify(res.body)).not.toContain("Foreign key lock timeout");
     expect(loggedStatus).toBe("partial_failure");
     expect(loggedError).toContain("Account deleted from Auth, but cleanup failed");
   });
@@ -362,6 +368,9 @@ describe("AirMileX Phase 5B-R4: Account Deletion Step-Up & Safety Invariants", (
       const longMessage = "A".repeat(800);
       expect(sanitizeErrorMessage(longMessage)?.length).toBe(500);
 
+      // OTP code canary
+      expect(sanitizeErrorMessage("Error verifying otp: 482910 for account")).toContain("[REDACTED");
+
       // Null/empty handling
       expect(sanitizeErrorMessage(null)).toBeNull();
       expect(sanitizeErrorMessage(undefined)).toBeNull();
@@ -381,6 +390,54 @@ describe("AirMileX Phase 5B-R4: Account Deletion Step-Up & Safety Invariants", (
       const secondRes = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
       expect(secondRes.status).toBe(200);
       expect(secondRes.body.success).toBe(true);
+    });
+
+    it("TASK A CANARY: database and auth exceptions never leak credentials, JWTs, or emails to client body or audit logs", async () => {
+      const sensitiveSecret = "sbp_live_supersecret_admin_key_12345";
+      const sensitiveConnStr = "postgres://postgres:SuperSecretP@ssword@db.xyz.supabase.co:5432/postgres";
+      const sensitiveEmail = "victim.private+test@example.com";
+      const sensitiveJwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.abcdef1234567890";
+      const sensitiveOtp = "729104";
+
+      let loggedStatus = "";
+      let loggedError: string | undefined;
+
+      const deps = createMockDeps({
+        verifyStepUp: async () => ({ verified: true }),
+        deleteAuthUser: async () => ({
+          error: new Error(`Internal Auth DB crash: ${sensitiveConnStr} using key ${sensitiveSecret} for ${sensitiveEmail} token=${sensitiveJwt} otp=${sensitiveOtp}`),
+        }),
+        logAttempt: async (status, err) => {
+          loggedStatus = status;
+          loggedError = err;
+        },
+      });
+
+      const res = await executeAccountDeletion(VALID_USER_ID, deps, {
+        userEmail: sensitiveEmail,
+        otpCode: sensitiveOtp,
+      });
+
+      // 1. Check HTTP response body
+      expect(res.status).toBe(500);
+      expect(res.body.category).toBe("auth_deletion_failure");
+      const bodyJson = JSON.stringify(res.body);
+      expect(bodyJson).not.toContain(sensitiveSecret);
+      expect(bodyJson).not.toContain(sensitiveConnStr);
+      expect(bodyJson).not.toContain(sensitiveEmail);
+      expect(bodyJson).not.toContain(sensitiveJwt);
+      expect(bodyJson).not.toContain(sensitiveOtp);
+
+      // 2. Check server audit log
+      expect(loggedStatus).toBe("error");
+      expect(loggedError).toBeDefined();
+      expect(loggedError).not.toContain(sensitiveSecret);
+      expect(loggedError).not.toContain(sensitiveConnStr);
+      expect(loggedError).not.toContain(sensitiveEmail);
+      expect(loggedError).not.toContain(sensitiveJwt);
+      expect(loggedError).not.toContain(sensitiveOtp);
+      expect(loggedError).toContain("[REDACTED_CONNECTION_STRING]");
+      expect(loggedError).toContain("[REDACTED_EMAIL]");
     });
   });
 });

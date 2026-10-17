@@ -9,7 +9,8 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "bun test src supabase/functions",
+    "test:vitest": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:integration": "bun test tests/integration"

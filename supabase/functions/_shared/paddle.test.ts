@@ -1113,6 +1113,103 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         expect(res.body.error).toBe("Unauthorized");
       });
     });
+
+    describe("TASK A CANARY: Webhook secret-safe error responses and retry semantics", () => {
+      it("fulfillment RPC error returns retryable 500 without leaking connection strings or credentials", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const sensitiveConnStr = "postgres://postgres:SuperSecretPaddleDB@db.internal:5432/postgres";
+        const sensitiveToken = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.sensitive_paddle_token";
+        const sensitiveEmail = "payer.sensitive+account@paddle-buyer.com";
+
+        const rawBody = buildTransactionPayload({
+          eventId: "evt_canary_fail_1",
+          transactionId: "txn_canary_fail_1",
+        });
+        const header = await createSignatureHeader(SECRET, rawBody);
+
+        const res = await processPaddleWebhookRequest("POST", rawBody, header, {
+          paddleWebhookSecret: SECRET,
+          paddlePriceId: PRICE_ID,
+          fulfillRpc: async () => ({
+            data: null,
+            error: new Error(`Database connection failed: ${sensitiveConnStr} using auth ${sensitiveToken} for ${sensitiveEmail}`),
+          }),
+        });
+
+        // 1. Must return 500 so Paddle retries
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe("Credit fulfillment database failure");
+        expect(res.body.category).toBe("fulfillment_database_failure");
+        expect((res.body as any).details).toBeUndefined();
+
+        // 2. HTTP response body must NOT leak secrets
+        const bodyStr = JSON.stringify(res.body);
+        expect(bodyStr).not.toContain(sensitiveConnStr);
+        expect(bodyStr).not.toContain("SuperSecretPaddleDB");
+        expect(bodyStr).not.toContain(sensitiveToken);
+        expect(bodyStr).not.toContain(sensitiveEmail);
+
+        // 3. Server logs must NOT leak secrets
+        const loggedCalls = errorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+        expect(loggedCalls).not.toContain(sensitiveConnStr);
+        expect(loggedCalls).not.toContain("SuperSecretPaddleDB");
+        expect(loggedCalls).not.toContain(sensitiveToken);
+        expect(loggedCalls).not.toContain(sensitiveEmail);
+        expect(loggedCalls).toContain("[REDACTED_CONNECTION_STRING]");
+        expect(loggedCalls).toContain("[REDACTED_EMAIL]");
+
+        errorSpy.mockRestore();
+      });
+
+      it("fulfillment unexpected exception returns retryable 500 without leaking details", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const sensitiveSecret = "pdl_live_apikey_CRITICAL_SECRET_CANARY_DO_NOT_LEAK";
+
+        const rawBody = buildTransactionPayload({
+          eventId: "evt_canary_throw_1",
+          transactionId: "txn_canary_throw_1",
+        });
+        const header = await createSignatureHeader(SECRET, rawBody);
+
+        const res = await processPaddleWebhookRequest("POST", rawBody, header, {
+          paddleWebhookSecret: SECRET,
+          paddlePriceId: PRICE_ID,
+          fulfillRpc: async () => {
+            throw new Error(`Unexpected failure with secret ${sensitiveSecret}`);
+          },
+        });
+
+        // Must return 500 for Paddle retry
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe("Internal error during fulfillment");
+        expect(res.body.category).toBe("internal_error");
+        expect((res.body as any).details).toBeUndefined();
+
+        const bodyStr = JSON.stringify(res.body);
+        expect(bodyStr).not.toContain(sensitiveSecret);
+        expect(bodyStr).not.toContain("CRITICAL_SECRET_CANARY");
+
+        errorSpy.mockRestore();
+      });
+
+      it("custom_data user_id containing sensitive strings is rejected without reflection", async () => {
+        const canaryPayload = "victim_email@test.com_sbp_secret_key_123456";
+        const rawBody = buildTransactionPayload({
+          userId: canaryPayload,
+        });
+        const header = await createSignatureHeader(SECRET, rawBody);
+
+        const res = await processPaddleWebhookRequest("POST", rawBody, header, {
+          paddleWebhookSecret: SECRET,
+          paddlePriceId: PRICE_ID,
+          fulfillRpc: async () => ({ data: null, error: null }),
+        });
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe("Invalid or missing user_id in transaction custom_data");
+        expect(JSON.stringify(res.body)).not.toContain(canaryPayload);
+      });
+    });
   });
 });
 

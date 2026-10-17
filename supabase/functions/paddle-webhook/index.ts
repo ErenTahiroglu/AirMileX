@@ -18,7 +18,7 @@ Deno.serve(async (req) => {
     if (!supabaseUrl || !serviceRoleKey) {
       console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
       return new Response(
-        JSON.stringify({ error: "Server misconfigured: database credentials missing" }),
+        JSON.stringify({ error: "Server misconfigured: database credentials missing", category: "configuration_error" }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
     const errorType = err instanceof Error ? err.name : "UnknownError";
     console.error(`paddle-webhook uncaught error (${errorType})`);
     return new Response(
-      JSON.stringify({ error: "Internal server error" }),
+      JSON.stringify({ error: "Internal server error", category: "internal_error" }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }

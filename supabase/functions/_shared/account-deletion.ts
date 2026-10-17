@@ -30,22 +30,26 @@ export interface AccountDeletionResult {
 
 /**
  * Sanitizes error and audit messages to prevent leakage of PII, credentials,
- * tokens, session headers, and backend connection details.
+ * tokens, session headers, OTP codes, and backend connection details.
  */
 export function sanitizeErrorMessage(message?: string | null): string | null {
   if (!message || typeof message !== "string") return null;
 
   return message
     .slice(0, 500)
+    // Redact connection strings (e.g. postgres://user:pass@host:5432/db) before email regex
+    .replace(/[a-zA-Z+]+:\/\/[^:]+:[^@]+@[^\s"']+/gi, "[REDACTED_CONNECTION_STRING]")
     // Redact email addresses
     .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[REDACTED_EMAIL]")
     // Redact Bearer tokens & JWTs
     .replace(/Bearer\s+[A-Za-z0-9-_=.]+/gi, "Bearer [REDACTED_TOKEN]")
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._-]+\b/g, "[REDACTED_JWT]")
-    // Redact connection strings (e.g. postgres://user:pass@host:5432/db)
-    .replace(/[a-zA-Z+]+:\/\/[^:]+:[^@]+@[^\s"']+/gi, "[REDACTED_CONNECTION_STRING]")
-    // Redact explicit secret/token fields
-    .replace(/(?:otp|token|code|password|secret|apikey)\s*[:=]\s*["']?[^"'\s,]+["']?/gi, (match) => {
+    // Redact Supabase and Paddle API keys by documented prefixes
+    .replace(/\b(?:sbp|pdl)_[a-zA-Z0-9_]{8,}\b/gi, "[REDACTED_API_KEY]")
+    // Redact explicit OTP / code / secret occurrences
+    .replace(/\b(?:otp|code|token|passcode)\s*[:=\s]\s*['"]?(\d{6})['"]?/gi, "code: [REDACTED_OTP]")
+    // Redact explicit secret/token fields with delimiter
+    .replace(/(?:otp|token|code|password|secret|apikey|key)\s*[:=]\s*["']?[^"'\s,]+["']?/gi, (match) => {
       const parts = match.split(/[:=]/);
       return `${parts[0]}: [REDACTED]`;
     });
@@ -77,26 +81,35 @@ export async function executeAccountDeletion(
   if (!otpCode) {
     return {
       status: 401,
-      body: { error: "Step-up authentication required: verification code missing" },
+      body: {
+        error: "Step-up authentication required: verification code missing",
+        category: "missing_verification_code",
+      },
     };
   }
 
   const stepUpResult = await deps.verifyStepUp(userId, options?.userEmail, otpCode);
   if (!stepUpResult.verified) {
-    await deps.logAttempt("unauthorized", stepUpResult.error ?? "Invalid verification code");
+    await deps.logAttempt("unauthorized", sanitizeErrorMessage(stepUpResult.error) ?? "Invalid verification code");
     return {
       status: 401,
-      body: { error: "Invalid or expired verification code" },
+      body: {
+        error: "Invalid or expired verification code",
+        category: "invalid_verification_code",
+      },
     };
   }
 
   // 2. Check rate limit
   const rateLimitCheck = await deps.checkRateLimit(userId);
   if (rateLimitCheck.error) {
-    await deps.logAttempt("error", `rate-check failed: ${rateLimitCheck.error}`);
+    await deps.logAttempt("error", sanitizeErrorMessage(`rate-check failed: ${rateLimitCheck.error}`) ?? "rate-check failed");
     return {
       status: 500,
-      body: { error: "Rate-limit check failed" },
+      body: {
+        error: "Rate-limit check failed",
+        category: "rate_limit_check_error",
+      },
     };
   }
 
@@ -107,6 +120,7 @@ export async function executeAccountDeletion(
       status: 429,
       body: {
         error: "Too many deletion attempts. Try again later.",
+        category: "rate_limited",
         retry_after_seconds: retryAfter,
       },
       headers: {
@@ -119,10 +133,14 @@ export async function executeAccountDeletion(
   // If this fails, user_settings and all financial state remain intact.
   const { error: authErr } = await deps.deleteAuthUser(userId);
   if (authErr) {
-    await deps.logAttempt("error", `auth-deletion-failed: ${authErr.message}`);
+    const sanitizedAuthErr = sanitizeErrorMessage(authErr.message) ?? "unknown_auth_error";
+    await deps.logAttempt("error", `auth-deletion-failed: ${sanitizedAuthErr}`);
     return {
       status: 500,
-      body: { error: authErr.message },
+      body: {
+        error: "Failed to delete account from authentication service",
+        category: "auth_deletion_failure",
+      },
     };
   }
 
@@ -143,10 +161,13 @@ export async function executeAccountDeletion(
 
   if (cleanupErrors.length > 0) {
     const errorMsg = `Account deleted from Auth, but cleanup failed: ${cleanupErrors.join("; ")}`;
-    await deps.logAttempt("partial_failure", errorMsg);
+    await deps.logAttempt("partial_failure", sanitizeErrorMessage(errorMsg) ?? "cleanup_failure");
     return {
       status: 500,
-      body: { error: errorMsg },
+      body: {
+        error: "Account deleted, but some associated data could not be removed",
+        category: "cleanup_partial_failure",
+      },
     };
   }
 

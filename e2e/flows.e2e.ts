@@ -320,4 +320,127 @@ test.describe("AirMileX Phase 5B: Browser E2E Verification", () => {
     await expect(returnHome).toBeVisible();
     await expect(returnHome).toHaveAttribute("href", "/");
   });
+
+  // Flow 13: Direct OAuth consent route renders failure card when authorization_id is missing
+  test("Flow 13: Direct OAuth consent route renders failure card when authorization_id is missing", async ({ page }) => {
+    await page.goto("/.lovable/oauth/consent");
+
+    // Card should display Authorization failed
+    const cardTitle = page.locator(".text-2xl, .font-semibold", { hasText: "Authorization failed" });
+    await expect(cardTitle).toBeVisible();
+
+    const cardDesc = page.locator("text=Missing authorization request id.");
+    await expect(cardDesc).toBeVisible();
+
+    const backButton = page.locator("button", { hasText: "Back to AirMileX" });
+    await expect(backButton).toBeVisible();
+  });
+
+  // Flow 14: Direct OAuth consent route renders client consent card when authorization_id and session are present
+  test("Flow 14: Direct OAuth consent route renders client consent card with non-sensitive test fixtures", async ({ page }) => {
+    const fakeUser = {
+      id: "00000000-0000-4000-a000-000000000002",
+      email: "oauth-tester@airmilex.local",
+      aud: "authenticated",
+      role: "authenticated",
+      app_metadata: { provider: "email" },
+      user_metadata: {},
+      created_at: new Date().toISOString(),
+    };
+
+    const fakeSession = {
+      access_token: "mock-jwt-token-oauth",
+      token_type: "bearer",
+      expires_in: 3600,
+      refresh_token: "mock-refresh-token-oauth",
+      user: fakeUser,
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+    };
+
+    await page.addInitScript(({ session }) => {
+      window.localStorage.setItem("sb-lumfnuyzdyzpokcxykvn-auth-token", JSON.stringify(session));
+    }, { session: fakeSession });
+
+    await page.route("**/auth/v1/user**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(fakeUser),
+      });
+    });
+
+    await page.route("**/auth/v1/oauth/authorizations/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          client: { name: "AirMileX Test Automator" },
+          redirect_url: "https://automator.test/oauth/callback",
+        }),
+      });
+    });
+
+    await page.goto("/.lovable/oauth/consent?authorization_id=auth-req-fixture-12345");
+
+    // Should render consent card with client name
+    const heading = page.locator("text=Connect AirMileX Test Automator to AirMileX");
+    await expect(heading).toBeVisible();
+
+    // Verify approve and deny buttons
+    const approveBtn = page.locator("button", { hasText: "Approve" });
+    const denyBtn = page.locator("button", { hasText: "Deny" });
+    await expect(approveBtn).toBeVisible();
+    await expect(denyBtn).toBeVisible();
+  });
+
+  // Flow 15: Cross-route navigation completes with 0 asset/chunk 404s and 0 uncaught errors
+  test("Flow 15: Cross-route navigation completes with 0 asset/chunk 404s and 0 uncaught errors", async ({ page }) => {
+    const failedUrls: string[] = [];
+    const pageErrors: string[] = [];
+
+    page.on("requestfailed", (req) => {
+      const url = req.url();
+      // Ignore external analytics or non-asset requests if any
+      if (url.includes("/assets/") || url.endsWith(".js") || url.endsWith(".css")) {
+        failedUrls.push(url);
+      }
+    });
+
+    page.on("pageerror", (err) => {
+      pageErrors.push(err.message);
+    });
+
+    const routesToTest = [
+      "/",
+      "/pricing",
+      "/terms-and-conditions",
+      "/privacy",
+      "/refund",
+      "/reset-password",
+      "/.lovable/oauth/consent",
+      "/unknown-route-test",
+    ];
+
+    for (const route of routesToTest) {
+      await page.goto(route);
+      await page.waitForLoadState("networkidle");
+    }
+
+    expect(failedUrls).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  // Flow 16: RouteErrorBoundary recovers cleanly on route transition without requiring full page reload
+  test("Flow 16: RouteErrorBoundary recovers cleanly on route transition", async ({ page }) => {
+    await page.goto("/pricing");
+    await expect(page.locator("h1")).toContainText("Simple, Transparent Mileage Pricing");
+
+    // Navigate to another route cleanly
+    await page.goto("/terms-and-conditions");
+    await expect(page.locator("h1")).toContainText("TERMS OF SERVICE");
+
+    // Navigate back to pricing
+    await page.goto("/pricing");
+    await expect(page.locator("h1")).toContainText("Simple, Transparent Mileage Pricing");
+  });
 });

@@ -32,7 +32,7 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Missing authorization" }), {
+      return new Response(JSON.stringify({ error: "Missing authorization", category: "unauthorized" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
           }
         }
       } catch {
-        return new Response(JSON.stringify({ error: "Invalid JSON payload" }), {
+        return new Response(JSON.stringify({ error: "Invalid JSON payload", category: "invalid_payload" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
     });
     const { data: userData, error: userErr } = await userClient.auth.getUser();
     if (userErr || !userData.user) {
-      return new Response(JSON.stringify({ error: "Invalid session" }), {
+      return new Response(JSON.stringify({ error: "Invalid session", category: "invalid_session" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -109,7 +109,7 @@ Deno.serve(async (req) => {
           if (verifyErr || !verifyData.user || verifyData.user.id !== uid) {
             return {
               verified: false,
-              error: verifyErr?.message || "User ID mismatch during verification",
+              error: "Verification failed or user ID mismatch",
             };
           }
 
@@ -185,7 +185,7 @@ Deno.serve(async (req) => {
       await logAttempt("error", `uncaught-exception: ${errorType}`);
     }
     return new Response(
-      JSON.stringify({ error: "An unexpected error occurred during account deletion" }),
+      JSON.stringify({ error: "An unexpected error occurred during account deletion", category: "internal_error" }),
       {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },

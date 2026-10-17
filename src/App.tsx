@@ -1,6 +1,6 @@
-import { lazy, Suspense, Component, type ReactNode } from "react";
+import { Suspense, Component, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes, Navigate, useSearchParams } from "react-router-dom";
+import { BrowserRouter, Route, Routes, Navigate, useSearchParams, useLocation } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -9,36 +9,19 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { SessionTimeoutWatcher } from "@/components/SessionTimeoutWatcher";
 import AuthPage from "./pages/AuthPage";
 import { consumePostAuthRedirect, isSafeRelativePath } from "@/lib/postAuthRedirect";
+import { lazyWithRetry } from "@/lib/lazyWithRetry";
 
-// Safe lazy loading with chunk reload fallback for stale deployment caches
-function lazyWithRetry<T extends React.ComponentType<any>>(
-  componentImport: () => Promise<{ default: T }>
-) {
-  return lazy(async () => {
-    try {
-      return await componentImport();
-    } catch (error) {
-      const hasRefreshed = sessionStorage.getItem("chunk_retry_reload");
-      if (!hasRefreshed) {
-        sessionStorage.setItem("chunk_retry_reload", "true");
-        window.location.reload();
-      }
-      throw error;
-    }
-  });
-}
-
-// Selective lazy loading for heavy/secondary routes
-const Dashboard = lazyWithRetry(() => import("./pages/Dashboard"));
-const NewJobPage = lazyWithRetry(() => import("./pages/NewJobPage"));
-const SettingsPage = lazyWithRetry(() => import("./pages/SettingsPage"));
-const PricingPage = lazyWithRetry(() => import("./pages/PricingPage"));
-const TermsPage = lazyWithRetry(() => import("./pages/TermsPage"));
-const PrivacyPage = lazyWithRetry(() => import("./pages/PrivacyPage"));
-const RefundPage = lazyWithRetry(() => import("./pages/RefundPage"));
-const ResetPasswordPage = lazyWithRetry(() => import("./pages/ResetPasswordPage"));
-const OAuthConsent = lazyWithRetry(() => import("./pages/OAuthConsent"));
-const NotFound = lazyWithRetry(() => import("./pages/NotFound"));
+// Selective lazy loading with per-chunk retry and recovery
+const Dashboard = lazyWithRetry(() => import("./pages/Dashboard"), "dashboard");
+const NewJobPage = lazyWithRetry(() => import("./pages/NewJobPage"), "new-job");
+const SettingsPage = lazyWithRetry(() => import("./pages/SettingsPage"), "settings");
+const PricingPage = lazyWithRetry(() => import("./pages/PricingPage"), "pricing");
+const TermsPage = lazyWithRetry(() => import("./pages/TermsPage"), "terms");
+const PrivacyPage = lazyWithRetry(() => import("./pages/PrivacyPage"), "privacy");
+const RefundPage = lazyWithRetry(() => import("./pages/RefundPage"), "refund");
+const ResetPasswordPage = lazyWithRetry(() => import("./pages/ResetPasswordPage"), "reset-password");
+const OAuthConsent = lazyWithRetry(() => import("./pages/OAuthConsent"), "oauth-consent");
+const NotFound = lazyWithRetry(() => import("./pages/NotFound"), "not-found");
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -58,7 +41,7 @@ const PageFallback = () => (
   </div>
 );
 
-class RouteErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+export class RouteErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   constructor(props: { children: ReactNode }) {
     super(props);
     this.state = { hasError: false };
@@ -87,6 +70,11 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
   }
 }
 
+const RouteErrorBoundaryWrapper = ({ children }: { children: ReactNode }) => {
+  const location = useLocation();
+  return <RouteErrorBoundary key={location.pathname}>{children}</RouteErrorBoundary>;
+};
+
 const AuthRedirect = () => {
   const { user, loading } = useAuth();
   const [searchParams] = useSearchParams();
@@ -111,7 +99,7 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
           <SessionTimeoutWatcher />
-          <RouteErrorBoundary>
+          <RouteErrorBoundaryWrapper>
             <Suspense fallback={<PageFallback />}>
               <Routes>
                 <Route path="/" element={<AuthRedirect />} />
@@ -127,7 +115,7 @@ const App = () => (
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </Suspense>
-          </RouteErrorBoundary>
+          </RouteErrorBoundaryWrapper>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>
@@ -135,4 +123,3 @@ const App = () => (
 );
 
 export default App;
-
