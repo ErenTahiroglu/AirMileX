@@ -36,6 +36,7 @@ VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+#variable_conflict use_column
 BEGIN
   -- Strict ownership check: caller can only inspect and initialize their own settings
   IF p_user_id IS DISTINCT FROM auth.uid() THEN
@@ -45,7 +46,7 @@ BEGIN
   -- Idempotently ensure the user settings row exists with default 50 credits
   INSERT INTO public.user_settings (id, credits)
   VALUES (p_user_id, 50)
-  ON CONFLICT (id) DO NOTHING;
+  ON CONFLICT ON CONSTRAINT user_settings_pkey DO NOTHING;
 
   RETURN QUERY
   SELECT us.id, us.maps_provider, us.credits, us.has_pat, us.has_maps_key
