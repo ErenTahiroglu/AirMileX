@@ -688,6 +688,93 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
       });
     });
 
+    describe("Requirement 0: Server-Side Payment Launch Gate", () => {
+      it("rejects checkout when checkoutEnabled is undefined / omitted with 403 Forbidden", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe("Paid checkout is currently disabled");
+      });
+
+      it("rejects checkout when checkoutEnabled is false with 403 Forbidden", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: false,
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe("Paid checkout is currently disabled");
+      });
+
+      it("rejects checkout when checkoutEnabled is string 'false' or invalid string", async () => {
+        let fetchCalled = false;
+        const mockFetch: typeof fetch = async () => {
+          fetchCalled = true;
+          return new Response("{}", { status: 200 });
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: "false",
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(fetchCalled).toBe(false);
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe("Paid checkout is currently disabled");
+      });
+
+      it("allows checkout when checkoutEnabled is boolean true or string 'true'", async () => {
+        const mockFetch: typeof fetch = async () => {
+          return new Response(
+            JSON.stringify({
+              data: { id: "txn_gate_001", checkout: { url: "https://sandbox-checkout.paddle.com" } },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        };
+
+        const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: "true",
+          environment: "sandbox",
+          apiKey: SANDBOX_KEY,
+          priceId: PRICE_ID,
+          userId: VALID_USER_ID,
+          fetchFn: mockFetch,
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.transaction_id).toBe("txn_gate_001");
+      });
+    });
+
     describe("Requirement 1 & 2: API Host Selection for Sandbox and Live", () => {
       it("Sandbox configuration selects the Sandbox API host (https://sandbox-api.paddle.com)", async () => {
         let capturedUrl = "";
@@ -711,6 +798,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,
@@ -745,6 +833,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "live",
           apiKey: LIVE_KEY,
           priceId: PRICE_ID,
@@ -768,6 +857,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: undefined,
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,
@@ -788,6 +878,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "staging",
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,
@@ -816,6 +907,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,
@@ -843,6 +935,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,
@@ -864,6 +957,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,
@@ -886,6 +980,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: secretToProtect,
           priceId: PRICE_ID,
@@ -921,6 +1016,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: undefined,
           priceId: PRICE_ID,
@@ -941,6 +1037,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: SANDBOX_KEY,
           priceId: undefined,
@@ -961,6 +1058,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: LIVE_KEY,
           priceId: PRICE_ID,
@@ -981,6 +1079,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "live",
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,
@@ -1001,6 +1100,7 @@ describe("AirMileX Phase 1B: Paddle Payment Integrity", () => {
         };
 
         const res = await createPaddleCheckoutTransaction({
+          checkoutEnabled: true,
           environment: "sandbox",
           apiKey: SANDBOX_KEY,
           priceId: PRICE_ID,

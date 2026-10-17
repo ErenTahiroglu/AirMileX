@@ -498,6 +498,7 @@ export interface CreatePaddleCheckoutParams {
   apiKey: string | null | undefined;
   priceId: string | null | undefined;
   userId: string | null | undefined;
+  checkoutEnabled?: boolean | string | null | undefined;
   fetchFn?: typeof fetch;
 }
 
@@ -517,6 +518,15 @@ export interface PaddleCheckoutResult {
 export async function createPaddleCheckoutTransaction(
   params: CreatePaddleCheckoutParams
 ): Promise<PaddleCheckoutResult> {
+  // Server-side launch gate: paid checkout is disabled by default
+  const isEnabled = params.checkoutEnabled === true || params.checkoutEnabled === "true";
+  if (!isEnabled) {
+    return {
+      status: 403,
+      body: { error: "Paid checkout is currently disabled" },
+    };
+  }
+
   // Validate user ID format
   if (!params.userId || typeof params.userId !== "string" || !UUID_REGEX.test(params.userId.trim())) {
     return {

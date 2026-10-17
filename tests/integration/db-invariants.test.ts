@@ -132,6 +132,113 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
         await cleanupTestUser(db, attackerUserId);
       }
     });
+
+    itWithDb("new user in auth.users automatically receives 50 credits via on_auth_user_created trigger", async (db) => {
+      const testUserId = crypto.randomUUID();
+      // createTestUser inserts into auth.users without touching public.user_settings
+      await createTestUser(db, testUserId);
+
+      // Verify that user_settings was automatically populated by trigger
+      const rows = await db`
+        SELECT credits FROM public.user_settings WHERE id = ${testUserId}
+      `;
+
+      expect(rows.length).toBe(1);
+      expect(rows[0].credits).toBe(50);
+
+      await cleanupTestUser(db, testUserId);
+    });
+
+    itWithDb("get_settings_flags idempotently initializes 50 credits if user_settings is missing", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+      // Explicitly delete user_settings row to simulate a legacy/uninitialized state
+      await db`DELETE FROM public.user_settings WHERE id = ${testUserId}`;
+
+      // Simulate authenticated caller requesting flags
+      await db`SET ROLE authenticated`;
+      await db`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: testUserId, role: "authenticated" })}, false)`;
+
+      const rows = await db`
+        SELECT * FROM public.get_settings_flags(${testUserId})
+      `;
+
+      expect(rows.length).toBe(1);
+      expect(rows[0].credits).toBe(50);
+      expect(rows[0].has_pat).toBe(false);
+
+      await cleanupTestUser(db, testUserId);
+    });
+
+    itWithDb("repeated get_settings_flags and login events never re-grant 50 credits to existing balance", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+
+      // Simulate user spending 30 credits (balance 20)
+      await db`SET ROLE service_role`;
+      await db`SELECT public.reserve_credits(${testUserId}, 30)`;
+
+      // User logs in again / refreshes page multiple times
+      await db`SET ROLE authenticated`;
+      await db`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: testUserId, role: "authenticated" })}, false)`;
+
+      for (let i = 0; i < 3; i++) {
+        const rows = await db`SELECT credits FROM public.get_settings_flags(${testUserId})`;
+        expect(rows.length).toBe(1);
+        expect(rows[0].credits).toBe(20); // NOT reset to 50
+      }
+
+      await cleanupTestUser(db, testUserId);
+    });
+
+    itWithDb("purchased credits > 50 are strictly preserved across get_settings_flags calls", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+
+      // Give user 550 credits as service_role (simulating Paddle fulfillment)
+      await db`SET ROLE service_role`;
+      await db`UPDATE public.user_settings SET credits = 550 WHERE id = ${testUserId}`;
+
+      // User requests flags as authenticated
+      await db`SET ROLE authenticated`;
+      await db`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: testUserId, role: "authenticated" })}, false)`;
+
+      const rows = await db`SELECT credits FROM public.get_settings_flags(${testUserId})`;
+      expect(rows.length).toBe(1);
+      expect(rows[0].credits).toBe(550); // Preserved intact
+
+      await cleanupTestUser(db, testUserId);
+    });
+
+    itWithDb("concurrent get_settings_flags calls idempotently resolve without race conditions", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+      await db`DELETE FROM public.user_settings WHERE id = ${testUserId}`;
+
+      // Concurrently call get_settings_flags 5 times across distinct connections
+      const results = await Promise.all(
+        Array.from({ length: 5 }, async () => {
+          const client = new SQL(PG_URL!);
+          try {
+            await client`SET ROLE authenticated`;
+            await client`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: testUserId, role: "authenticated" })}, false)`;
+            const [row] = await client`SELECT credits FROM public.get_settings_flags(${testUserId})`;
+            return row.credits;
+          } finally {
+            await client.close();
+          }
+        })
+      );
+
+      for (const balance of results) {
+        expect(balance).toBe(50);
+      }
+
+      const [finalRow] = await db`SELECT credits FROM public.user_settings WHERE id = ${testUserId}`;
+      expect(finalRow.credits).toBe(50);
+
+      await cleanupTestUser(db, testUserId);
+    });
   });
 
   // =========================================================================
@@ -233,6 +340,79 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
         failedSixth = true;
       }
       expect(failedSixth).toBe(true);
+
+      await cleanupTestUser(db, userId);
+    });
+
+    itWithDb("negative credit reservation is rejected and cannot inflate balance", async (db) => {
+      const userId = crypto.randomUUID();
+      await createTestUser(db, userId);
+
+      await db`SET ROLE service_role`;
+      let errorThrown = false;
+      try {
+        await db`SELECT public.reserve_credits(${userId}, -10)`;
+      } catch (err: any) {
+        errorThrown = true;
+        expect(err.message).toContain("Invalid reservation amount");
+      }
+      expect(errorThrown).toBe(true);
+
+      // Verify credits were NOT increased from 50 to 60
+      const [row] = await db`SELECT credits FROM public.user_settings WHERE id = ${userId}`;
+      expect(row.credits).toBe(50);
+
+      await cleanupTestUser(db, userId);
+    });
+
+    itWithDb("zero and null credit reservations are rejected with clear exception", async (db) => {
+      const userId = crypto.randomUUID();
+      await createTestUser(db, userId);
+
+      await db`SET ROLE service_role`;
+
+      // Zero
+      let zeroFailed = false;
+      try {
+        await db`SELECT public.reserve_credits(${userId}, 0)`;
+      } catch (err: any) {
+        zeroFailed = true;
+        expect(err.message).toContain("Invalid reservation amount");
+      }
+      expect(zeroFailed).toBe(true);
+
+      // Null
+      let nullFailed = false;
+      try {
+        await db`SELECT public.reserve_credits(${userId}, null)`;
+      } catch (err: any) {
+        nullFailed = true;
+        expect(err.message).toContain("Invalid reservation amount");
+      }
+      expect(nullFailed).toBe(true);
+
+      const [row] = await db`SELECT credits FROM public.user_settings WHERE id = ${userId}`;
+      expect(row.credits).toBe(50);
+
+      await cleanupTestUser(db, userId);
+    });
+
+    itWithDb("database-level constraint blocks direct updates that would make credits negative", async (db) => {
+      const userId = crypto.randomUUID();
+      await createTestUser(db, userId);
+
+      await db`SET ROLE service_role`;
+      let constraintTriggered = false;
+      try {
+        await db`UPDATE public.user_settings SET credits = -5 WHERE id = ${userId}`;
+      } catch (err: any) {
+        constraintTriggered = true;
+        expect(err.message).toContain("user_settings_credits_nonnegative");
+      }
+      expect(constraintTriggered).toBe(true);
+
+      const [row] = await db`SELECT credits FROM public.user_settings WHERE id = ${userId}`;
+      expect(row.credits).toBe(50);
 
       await cleanupTestUser(db, userId);
     });

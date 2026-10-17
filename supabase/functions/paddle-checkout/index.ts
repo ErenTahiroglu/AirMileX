@@ -49,6 +49,7 @@ Deno.serve(async (req) => {
     const userId = claimsData.claims.sub;
 
     const result = await createPaddleCheckoutTransaction({
+      checkoutEnabled: Deno.env.get("PADDLE_CHECKOUT_ENABLED"),
       environment: Deno.env.get("PADDLE_ENVIRONMENT"),
       apiKey: Deno.env.get("PADDLE_API_KEY"),
       priceId: Deno.env.get("PADDLE_PRICE_ID"),
