@@ -2,13 +2,25 @@ import { describe, expect, it } from "vitest";
 import {
   executeAccountDeletion,
   type AccountDeletionDeps,
+  type StepUpAuthOptions,
 } from "./account-deletion.ts";
 
-describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
+describe("AirMileX Phase 5B-R4: Account Deletion Step-Up & Safety Invariants", () => {
   const VALID_USER_ID = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
+  const VALID_USER_EMAIL = "user@example.com";
+  const VALID_OTP_CODE = "123456";
+
+  const defaultStepUpOptions: StepUpAuthOptions = {
+    userEmail: VALID_USER_EMAIL,
+    otpCode: VALID_OTP_CODE,
+  };
 
   const createMockDeps = (overrides?: Partial<AccountDeletionDeps>): AccountDeletionDeps => {
     return {
+      verifyStepUp: async (_uid, _email, code) => {
+        if (code === VALID_OTP_CODE) return { verified: true };
+        return { verified: false, error: "Invalid verification code" };
+      },
       checkRateLimit: async () => ({ rateLimited: false }),
       deleteAuthUser: async () => ({ error: null }),
       deleteCalculationLogs: async () => ({ error: null }),
@@ -20,15 +32,119 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
     };
   };
 
+  // -------------------------------------------------------------------------
+  // Input & Step-Up Negative Tests
+  // -------------------------------------------------------------------------
   it("rejects missing or empty user id with 400 Bad Request", async () => {
     const deps = createMockDeps();
-    const res1 = await executeAccountDeletion("", deps);
+    const res1 = await executeAccountDeletion("", deps, defaultStepUpOptions);
     expect(res1.status).toBe(400);
 
-    const res2 = await executeAccountDeletion("   ", deps);
+    const res2 = await executeAccountDeletion("   ", deps, defaultStepUpOptions);
     expect(res2.status).toBe(400);
   });
 
+  it("TASK A NEGATIVE: rejects direct deletion request without step-up options with 401 Unauthorized", async () => {
+    let authDeleted = false;
+    let tablesDeleted = false;
+    const deps = createMockDeps({
+      deleteAuthUser: async () => {
+        authDeleted = true;
+        return { error: null };
+      },
+      deleteUserSettings: async () => {
+        tablesDeleted = true;
+        return { error: null };
+      },
+    });
+
+    // Caller makes direct call without options/body
+    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toContain("verification code missing");
+    expect(authDeleted).toBe(false);
+    expect(tablesDeleted).toBe(false);
+  });
+
+  it("TASK A NEGATIVE: rejects direct deletion request with blank or whitespace otp_code with 401 Unauthorized", async () => {
+    const deps = createMockDeps();
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, {
+      userEmail: VALID_USER_EMAIL,
+      otpCode: "   ",
+    });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toContain("verification code missing");
+  });
+
+  it("TASK A NEGATIVE: rejects deletion when step-up verification fails (invalid code) with 401 and logs unauthorized", async () => {
+    let loggedStatus = "";
+    let loggedError: string | undefined;
+    let authDeleted = false;
+
+    const deps = createMockDeps({
+      deleteAuthUser: async () => {
+        authDeleted = true;
+        return { error: null };
+      },
+      logAttempt: async (status, err) => {
+        loggedStatus = status;
+        loggedError = err;
+      },
+    });
+
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, {
+      userEmail: VALID_USER_EMAIL,
+      otpCode: "000000", // Wrong code
+    });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("Invalid or expired verification code");
+    expect(authDeleted).toBe(false);
+    expect(loggedStatus).toBe("unauthorized");
+    expect(loggedError).toBe("Invalid verification code");
+  });
+
+  it("TASK A NEGATIVE: rejects deletion when step-up code is expired or replayed with 401 Unauthorized", async () => {
+    let authDeleted = false;
+    const deps = createMockDeps({
+      verifyStepUp: async () => ({
+        verified: false,
+        error: "Token has expired or is invalid",
+      }),
+      deleteAuthUser: async () => {
+        authDeleted = true;
+        return { error: null };
+      },
+    });
+
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("Invalid or expired verification code");
+    expect(authDeleted).toBe(false);
+  });
+
+  it("TASK A NEGATIVE: rejects deletion when step-up authorization belongs to a different user", async () => {
+    let authDeleted = false;
+    const deps = createMockDeps({
+      verifyStepUp: async () => ({
+        verified: false,
+        error: "User ID mismatch during verification",
+      }),
+      deleteAuthUser: async () => {
+        authDeleted = true;
+        return { error: null };
+      },
+    });
+
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("Invalid or expired verification code");
+    expect(authDeleted).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Rate Limiting Tests
+  // -------------------------------------------------------------------------
   it("enforces rate-limiting: returns 429 when attempt occurs within cooldown", async () => {
     let loggedStatus = "";
     const deps = createMockDeps({
@@ -38,7 +154,7 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
     });
 
-    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
     expect(res.status).toBe(429);
     expect(res.body.retry_after_seconds).toBe(1800);
     expect(res.headers?.["Retry-After"]).toBe("1800");
@@ -56,13 +172,16 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
     });
 
-    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
     expect(res.status).toBe(500);
     expect(res.body.error).toBe("Rate-limit check failed");
     expect(loggedStatus).toBe("error");
     expect(loggedError).toContain("rate-check failed: DB connection timeout");
   });
 
+  // -------------------------------------------------------------------------
+  // Invariant & Deletion Sequencing Tests
+  // -------------------------------------------------------------------------
   it("INVARIANT: Auth deletion failure returns 500 and NEVER deletes user_settings, address pairs, or calculation data", async () => {
     let userSettingsDeleted = false;
     let logsDeleted = false;
@@ -95,7 +214,7 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
     });
 
-    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
 
     // Verify 500 response
     expect(res.status).toBe(500);
@@ -142,7 +261,7 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
     });
 
-    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -173,7 +292,7 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
     });
 
-    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
 
     // Must NOT return 200 success
     expect(res.status).toBe(500);
@@ -198,7 +317,7 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
     });
 
-    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+    const res = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
 
     // Must NOT return 200 success
     expect(res.status).toBe(500);

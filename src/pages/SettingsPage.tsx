@@ -170,15 +170,32 @@ const SettingsPage = () => {
     if (!user?.email) return;
     setDeleting(true);
     try {
-      const { error: verifyError } = await supabase.auth.verifyOtp({
-        email: user.email,
-        token: otpCode.trim(),
-        type: "email",
-      });
-      if (verifyError) throw new Error("Invalid or expired code. Please try again.");
+      const code = otpCode.trim();
+      if (code.length !== 6) {
+        throw new Error("Please enter a valid 6-digit confirmation code.");
+      }
 
-      const { error } = await supabase.functions.invoke("delete-account");
-      if (error) throw error;
+      const { data, error } = await supabase.functions.invoke("delete-account", {
+        body: { otp_code: code },
+      });
+
+      if (error) {
+        let msg = error.message;
+        try {
+          if ("context" in error && error.context) {
+            const body = await (error.context as Response).json();
+            if (body?.error) msg = body.error;
+          }
+        } catch {
+          // ignore parsing error
+        }
+        throw new Error(msg || "Failed to delete account");
+      }
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
       await supabase.auth.signOut({ scope: "global" });
       toast({ title: "Account deleted", description: "Your account and data have been removed." });
       navigate("/", { replace: true });

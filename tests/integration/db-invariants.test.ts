@@ -398,6 +398,73 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       // Cleanup audit row for test isolation
       await db`DELETE FROM public.account_deletion_attempts WHERE user_id = ${testUserId}`;
     });
+
+    itWithDb("processed_paddle_events payment receipts persist after account deletion for statutory audit", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+
+      // Record a completed payment transaction receipt
+      const eventId = `evt_${crypto.randomUUID().slice(0, 8)}`;
+      const txId = `txn_${crypto.randomUUID().slice(0, 8)}`;
+      await db`SET ROLE service_role`;
+      await db`
+        INSERT INTO public.processed_paddle_events (id, transaction_id, user_id, credits_added, created_at)
+        VALUES (${eventId}, ${txId}, ${testUserId}, 500, now())
+      `;
+
+      // Verify payment receipt exists
+      const [receiptBefore] = await db`
+        SELECT transaction_id, user_id, credits_added
+        FROM public.processed_paddle_events
+        WHERE id = ${eventId}
+      `;
+      expect(receiptBefore.transaction_id).toBe(txId);
+      expect(receiptBefore.user_id).toBe(testUserId);
+
+      // Delete the auth user
+      await db`SET ROLE postgres`;
+      await db`DELETE FROM auth.users WHERE id = ${testUserId}`;
+
+      // CRITICAL: Financial transaction receipt PERSISTS for tax, accounting & dispute defense
+      const [receiptAfter] = await db`
+        SELECT transaction_id, user_id, credits_added
+        FROM public.processed_paddle_events
+        WHERE id = ${eventId}
+      `;
+      expect(receiptAfter).toBeDefined();
+      expect(receiptAfter.transaction_id).toBe(txId);
+      expect(receiptAfter.user_id).toBe(testUserId);
+      expect(receiptAfter.credits_added).toBe(500);
+
+      // Clean up test receipt
+      await db`DELETE FROM public.processed_paddle_events WHERE id = ${eventId}`;
+    });
+
+    itWithDb("sanitizes error messages logged in account_deletion_attempts to prevent email leaks", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+
+      // Raw error with personal email
+      const rawError = "Failed deleting user user.name+tag@example.com: connection timeout";
+      const sanitized = rawError
+        .slice(0, 500)
+        .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[REDACTED_EMAIL]");
+
+      await db`SET ROLE service_role`;
+      await db`
+        INSERT INTO public.account_deletion_attempts (user_id, status, error_message, attempted_at)
+        VALUES (${testUserId}, 'error', ${sanitized}, now())
+      `;
+
+      const [audit] = await db`
+        SELECT error_message FROM public.account_deletion_attempts WHERE user_id = ${testUserId}
+      `;
+      expect(audit.error_message).toContain("[REDACTED_EMAIL]");
+      expect(audit.error_message).not.toContain("user.name+tag@example.com");
+
+      await db`DELETE FROM public.account_deletion_attempts WHERE user_id = ${testUserId}`;
+      await cleanupTestUser(db, testUserId);
+    });
   });
 
   // =========================================================================

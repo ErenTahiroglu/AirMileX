@@ -21,10 +21,15 @@ Deno.serve(async (req) => {
 
   const logAttempt = async (status: string, errorMessage?: string) => {
     if (!userId) return;
+    const sanitizedError = errorMessage
+      ? errorMessage
+          .slice(0, 500)
+          .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[REDACTED_EMAIL]")
+      : null;
     await admin.from("account_deletion_attempts").insert({
       user_id: userId,
       status,
-      error_message: errorMessage ?? null,
+      error_message: sanitizedError,
     });
   };
 
@@ -35,6 +40,25 @@ Deno.serve(async (req) => {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Parse step-up verification code from request payload if present
+    let otpCode: string | undefined = undefined;
+    if (req.method === "POST") {
+      try {
+        const text = await req.text();
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed.otp_code === "string") {
+            otpCode = parsed.otp_code;
+          }
+        }
+      } catch {
+        return new Response(JSON.stringify({ error: "Invalid JSON payload" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // Verify the caller's identity using their JWT
@@ -51,53 +75,85 @@ Deno.serve(async (req) => {
 
     userId = userData.user.id;
 
-    const result = await executeAccountDeletion(userId, {
-      checkRateLimit: async (uid) => {
-        const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
-        const { data: recent, error: recentErr } = await admin
-          .from("account_deletion_attempts")
-          .select("attempted_at")
-          .eq("user_id", uid)
-          .gte("attempted_at", since)
-          .order("attempted_at", { ascending: false })
-          .limit(1);
+    const result = await executeAccountDeletion(
+      userId,
+      {
+        verifyStepUp: async (uid, email, code) => {
+          if (!code || typeof code !== "string" || code.trim().length !== 6) {
+            return { verified: false, error: "Step-up verification code must be 6 digits" };
+          }
+          if (!email) {
+            return { verified: false, error: "No email associated with account" };
+          }
 
-        if (recentErr) {
-          return { rateLimited: false, error: recentErr.message };
-        }
+          // Verify the OTP via Supabase Auth
+          const authClient = createClient(supabaseUrl, anonKey);
+          const { data: verifyData, error: verifyErr } = await authClient.auth.verifyOtp({
+            email,
+            token: code.trim(),
+            type: "email",
+          });
 
-        if (recent && recent.length > 0) {
-          const last = new Date(recent[0].attempted_at).getTime();
-          const retryAfterSec = Math.max(
-            1,
-            Math.ceil((last + RATE_LIMIT_WINDOW_MS - Date.now()) / 1000)
-          );
-          return { rateLimited: true, retryAfterSec };
-        }
+          if (verifyErr || !verifyData.user || verifyData.user.id !== uid) {
+            return {
+              verified: false,
+              error: verifyErr?.message || "User ID mismatch during verification",
+            };
+          }
 
-        return { rateLimited: false };
+          return { verified: true };
+        },
+        checkRateLimit: async (uid) => {
+          const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
+          const { data: recent, error: recentErr } = await admin
+            .from("account_deletion_attempts")
+            .select("attempted_at")
+            .eq("user_id", uid)
+            .gte("attempted_at", since)
+            .order("attempted_at", { ascending: false })
+            .limit(1);
+
+          if (recentErr) {
+            return { rateLimited: false, error: recentErr.message };
+          }
+
+          if (recent && recent.length > 0) {
+            const last = new Date(recent[0].attempted_at).getTime();
+            const retryAfterSec = Math.max(
+              1,
+              Math.ceil((last + RATE_LIMIT_WINDOW_MS - Date.now()) / 1000)
+            );
+            return { rateLimited: true, retryAfterSec };
+          }
+
+          return { rateLimited: false };
+        },
+        deleteAuthUser: async (uid) => {
+          return await admin.auth.admin.deleteUser(uid);
+        },
+        deleteCalculationLogs: async (uid) => {
+          const { error } = await admin.from("calculation_logs").delete().eq("user_id", uid);
+          return { error };
+        },
+        deleteSavedAddressPairs: async (uid) => {
+          const { error } = await admin.from("saved_address_pairs").delete().eq("user_id", uid);
+          return { error };
+        },
+        deleteSavedMappings: async (uid) => {
+          const { error } = await admin.from("saved_mappings").delete().eq("user_id", uid);
+          return { error };
+        },
+        deleteUserSettings: async (uid) => {
+          const { error } = await admin.from("user_settings").delete().eq("id", uid);
+          return { error };
+        },
+        logAttempt,
       },
-      deleteAuthUser: async (uid) => {
-        return await admin.auth.admin.deleteUser(uid);
-      },
-      deleteCalculationLogs: async (uid) => {
-        const { error } = await admin.from("calculation_logs").delete().eq("user_id", uid);
-        return { error };
-      },
-      deleteSavedAddressPairs: async (uid) => {
-        const { error } = await admin.from("saved_address_pairs").delete().eq("user_id", uid);
-        return { error };
-      },
-      deleteSavedMappings: async (uid) => {
-        const { error } = await admin.from("saved_mappings").delete().eq("user_id", uid);
-        return { error };
-      },
-      deleteUserSettings: async (uid) => {
-        const { error } = await admin.from("user_settings").delete().eq("id", uid);
-        return { error };
-      },
-      logAttempt,
-    });
+      {
+        userEmail: userData.user.email,
+        otpCode,
+      }
+    );
 
     return new Response(JSON.stringify(result.body), {
       status: result.status,

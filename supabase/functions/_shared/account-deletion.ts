@@ -1,4 +1,14 @@
+export interface StepUpAuthOptions {
+  userEmail?: string;
+  otpCode?: string;
+}
+
 export interface AccountDeletionDeps {
+  verifyStepUp: (
+    userId: string,
+    userEmail?: string,
+    otpCode?: string
+  ) => Promise<{ verified: boolean; error?: string }>;
   deleteAuthUser: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
   deleteCalculationLogs: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
   deleteSavedAddressPairs: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
@@ -20,15 +30,17 @@ export interface AccountDeletionResult {
 
 /**
  * Executes safe account deletion:
- * 1. Validates rate limit.
- * 2. Deletes auth user FIRST so that if auth deletion fails,
+ * 1. Enforces server-side step-up reauthentication (valid email OTP).
+ * 2. Validates rate limit.
+ * 3. Deletes auth user FIRST so that if auth deletion fails,
  *    no database or financial state is partially destroyed.
- * 3. Deletes dependent records with explicit error checks.
- * 4. Logs audit trail in account_deletion_attempts.
+ * 4. Deletes dependent records with explicit error checks.
+ * 5. Logs audit trail in account_deletion_attempts with sanitized error.
  */
 export async function executeAccountDeletion(
   userId: string,
-  deps: AccountDeletionDeps
+  deps: AccountDeletionDeps,
+  options?: StepUpAuthOptions
 ): Promise<AccountDeletionResult> {
   if (!userId || typeof userId !== "string" || userId.trim() === "") {
     return {
@@ -37,7 +49,25 @@ export async function executeAccountDeletion(
     };
   }
 
-  // 1. Check rate limit
+  // 1. Enforce Server-Side Step-Up Reauthentication FIRST
+  const otpCode = options?.otpCode?.trim();
+  if (!otpCode) {
+    return {
+      status: 401,
+      body: { error: "Step-up authentication required: verification code missing" },
+    };
+  }
+
+  const stepUpResult = await deps.verifyStepUp(userId, options?.userEmail, otpCode);
+  if (!stepUpResult.verified) {
+    await deps.logAttempt("unauthorized", stepUpResult.error ?? "Invalid verification code");
+    return {
+      status: 401,
+      body: { error: "Invalid or expired verification code" },
+    };
+  }
+
+  // 2. Check rate limit
   const rateLimitCheck = await deps.checkRateLimit(userId);
   if (rateLimitCheck.error) {
     await deps.logAttempt("error", `rate-check failed: ${rateLimitCheck.error}`);
