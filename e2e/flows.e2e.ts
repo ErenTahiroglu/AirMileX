@@ -221,4 +221,103 @@ test.describe("AirMileX Phase 5B: Browser E2E Verification", () => {
       expect(box.x + box.width).toBeLessThanOrEqual(375);
     }
   });
+
+  // Flow 9: Legal pages (Terms, Privacy, Refund) render correctly under route-level lazy loading
+  test("Flow 9: Legal pages render correctly with accurate retention and refund copy", async ({ page }) => {
+    // 9A: Privacy Policy
+    await page.goto("/privacy");
+    await expect(page.locator("h1")).toContainText("PRIVACY POLICY / GİZLİLİK POLİTİKASI");
+    await expect(page.locator("text=Saklama Süresi ve Hesap Silme")).toBeVisible();
+    await expect(page.locator("text=Retention and Account Deletion")).toBeVisible();
+
+    // 9B: Refund Policy
+    await page.goto("/refund");
+    await expect(page.locator("h1")).toContainText("REFUND POLICY / İADE POLİTİKASI");
+    await expect(page.locator("text=30 Günlük Money-Back Guarantee")).toBeVisible();
+    await expect(page.locator("text=Purchase Model and Subscription Cancellation")).toBeVisible();
+
+    // 9C: Terms of Service
+    await page.goto("/terms-and-conditions");
+    await expect(page.locator("h1")).toContainText("TERMS OF SERVICE / HİZMET ŞARTLARI");
+    await expect(page.locator("text=Paddle ve Ödeme İşlemleri")).toBeVisible();
+  });
+
+  // Flow 10: Reset password page renders correctly under lazy loading
+  test("Flow 10: Reset password page renders correctly under lazy loading", async ({ page }) => {
+    await page.goto("/reset-password");
+    await expect(page.locator("h1")).toContainText("Reset your AirMileX password");
+    await expect(page.locator('input[type="password"]').first()).toBeVisible();
+    await expect(page.locator('button[type="submit"]')).toBeVisible();
+  });
+
+  // Flow 11: Settings account deletion UI step-up confirmation modal opens safely
+  test("Flow 11: Settings account deletion UI modal renders and step-up confirmation flow opens", async ({ page }) => {
+    const fakeUser = {
+      id: "00000000-0000-4000-a000-000000000001",
+      email: "playwright-tester@airmilex.local",
+      aud: "authenticated",
+      role: "authenticated",
+      app_metadata: { provider: "email" },
+      user_metadata: {},
+      created_at: new Date().toISOString(),
+    };
+
+    const fakeSession = {
+      access_token: "mock-jwt-token",
+      token_type: "bearer",
+      expires_in: 3600,
+      refresh_token: "mock-refresh-token",
+      user: fakeUser,
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+    };
+
+    await page.addInitScript(({ session }) => {
+      window.localStorage.setItem("sb-lumfnuyzdyzpokcxykvn-auth-token", JSON.stringify(session));
+    }, { session: fakeSession });
+
+    await page.route("**/auth/v1/user**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(fakeUser),
+      });
+    });
+
+    await page.route("**/rest/v1/rpc/get_settings_flags**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{ has_pat: false, credits: 50 }]),
+      });
+    });
+
+    await page.goto("/settings");
+    await expect(page.locator("h1").first()).toContainText("Settings");
+
+    // Danger Zone should be visible
+    const deleteButton = page.locator("button", { hasText: "Delete account" });
+    await expect(deleteButton).toBeVisible();
+    await deleteButton.click();
+
+    // Account deletion confirmation dialog opens
+    const dialog = page.locator("[role='alertdialog']");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("text=Delete your account permanently?")).toBeVisible();
+    await expect(dialog.locator("text=This action cannot be undone")).toBeVisible();
+
+    // Verify cancel button dismisses dialog
+    const cancelButton = dialog.locator("button", { hasText: "Cancel" });
+    await cancelButton.click();
+    await expect(dialog).not.toBeVisible();
+  });
+
+  // Flow 12: 404 Not Found page renders for unmapped routes
+  test("Flow 12: 404 Not Found page renders for unmapped routes", async ({ page }) => {
+    await page.goto("/non-existent-page-404");
+    await expect(page.locator("h1")).toContainText("404");
+    await expect(page.locator("text=Oops! Page not found")).toBeVisible();
+    const returnHome = page.locator("a", { hasText: "Return to Home" });
+    await expect(returnHome).toBeVisible();
+    await expect(returnHome).toHaveAttribute("href", "/");
+  });
 });
