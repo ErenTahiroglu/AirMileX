@@ -114,7 +114,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await cleanupTestUser(db, testUserId);
     });
 
-    itWithDb("unauthorized creation cannot inflate the initial balance past 50", async (db) => {
+    itWithDb("unauthorized direct creation cannot inflate initial balance (forced to 0)", async (db) => {
       const attackerUserId = crypto.randomUUID();
       await createTestUser(db, attackerUserId);
       // Remove the trigger-created row to isolate direct unauthorized insert behavior
@@ -130,7 +130,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
         `;
 
         expect(rows.length).toBe(1);
-        expect(rows[0].credits).toBe(50); // Successfully reset to 50 by database trigger
+        expect(rows[0].credits).toBe(0); // Successfully forced to 0 by enforce_credits_default_on_insert
       } finally {
         await cleanupTestUser(db, attackerUserId);
       }
@@ -152,13 +152,13 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await cleanupTestUser(db, testUserId);
     });
 
-    itWithDb("get_settings_flags idempotently initializes 50 credits if user_settings is missing", async (db) => {
+    itWithDb("INVARIANT: missing user_settings row for existing user returns empty and never re-grants 50 credits", async (db) => {
       const testUserId = crypto.randomUUID();
       await createTestUser(db, testUserId);
-      // Explicitly delete user_settings row to simulate a legacy/uninitialized state
+      // Explicitly delete user_settings row to simulate a failed deletion or orphaned state
       await db`DELETE FROM public.user_settings WHERE id = ${testUserId}`;
 
-      // Simulate authenticated caller requesting flags
+      // Authenticated caller requests flags
       await db`SET ROLE authenticated`;
       await db`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: testUserId, role: "authenticated" })}, false)`;
 
@@ -166,14 +166,39 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
         SELECT * FROM public.get_settings_flags(${testUserId})
       `;
 
-      expect(rows.length).toBe(1);
-      expect(rows[0].credits).toBe(50);
-      expect(rows[0].has_pat).toBe(false);
+      // Crucial: get_settings_flags must NOT blindly recreate row or grant 50 credits
+      expect(rows.length).toBe(0);
+
+      // Verify DB remains empty of user_settings for this user
+      await db`SET ROLE postgres`;
+      const [checkRow] = await db`SELECT count(*)::int as count FROM public.user_settings WHERE id = ${testUserId}`;
+      expect(checkRow.count).toBe(0);
 
       await cleanupTestUser(db, testUserId);
     });
 
-    itWithDb("repeated get_settings_flags and login events never re-grant 50 credits to existing balance", async (db) => {
+    itWithDb("INVARIANT: existing 0-credit balance remains 0 across repeated get_settings_flags calls", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+
+      // User spends all 50 credits (balance 0)
+      await db`SET ROLE service_role`;
+      await db`SELECT public.reserve_credits(${testUserId}, 50)`;
+
+      // User calls get_settings_flags repeatedly
+      await db`SET ROLE authenticated`;
+      await db`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: testUserId, role: "authenticated" })}, false)`;
+
+      for (let i = 0; i < 3; i++) {
+        const rows = await db`SELECT credits FROM public.get_settings_flags(${testUserId})`;
+        expect(rows.length).toBe(1);
+        expect(rows[0].credits).toBe(0); // Strictly preserved at 0, never reset to 50
+      }
+
+      await cleanupTestUser(db, testUserId);
+    });
+
+    itWithDb("INVARIANT: existing 20-credit balance remains 20 across repeated get_settings_flags calls", async (db) => {
       const testUserId = crypto.randomUUID();
       await createTestUser(db, testUserId);
 
@@ -194,7 +219,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await cleanupTestUser(db, testUserId);
     });
 
-    itWithDb("purchased credits > 50 are strictly preserved across get_settings_flags calls", async (db) => {
+    itWithDb("INVARIANT: purchased credits > 50 are strictly preserved across get_settings_flags calls", async (db) => {
       const testUserId = crypto.randomUUID();
       await createTestUser(db, testUserId);
 
@@ -213,10 +238,26 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await cleanupTestUser(db, testUserId);
     });
 
-    itWithDb("concurrent get_settings_flags calls idempotently resolve without race conditions", async (db) => {
+    itWithDb("cross-user access to get_settings_flags is blocked by ownership validation", async (db) => {
+      const victimId = crypto.randomUUID();
+      const attackerId = crypto.randomUUID();
+      await createTestUser(db, victimId);
+      await createTestUser(db, attackerId);
+
+      // Attacker attempts to call get_settings_flags for victim
+      await db`SET ROLE authenticated`;
+      await db`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: attackerId, role: "authenticated" })}, false)`;
+
+      const rows = await db`SELECT * FROM public.get_settings_flags(${victimId})`;
+      expect(rows.length).toBe(0);
+
+      await cleanupTestUser(db, victimId);
+      await cleanupTestUser(db, attackerId);
+    });
+
+    itWithDb("concurrent get_settings_flags calls for existing user read safely without race conditions", async (db) => {
       const testUserId = crypto.randomUUID();
       await createTestUser(db, testUserId);
-      await db`DELETE FROM public.user_settings WHERE id = ${testUserId}`;
 
       // Concurrently call get_settings_flags 5 times across distinct connections
       const results = await Promise.all(
@@ -237,10 +278,41 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
         expect(balance).toBe(50);
       }
 
-      const [finalRow] = await db`SELECT credits FROM public.user_settings WHERE id = ${testUserId}`;
-      expect(finalRow.credits).toBe(50);
-
       await cleanupTestUser(db, testUserId);
+    });
+
+    itWithDb("complete account deletion cascades and deletes all user-owned rows", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+
+      // Insert calculation logs and saved mappings as service_role
+      await db`SET ROLE service_role`;
+      await db`
+        INSERT INTO public.calculation_logs (id, user_id, origin_address, destination_address, distance_miles, provider, created_at)
+        VALUES (${crypto.randomUUID()}, ${testUserId}, 'Origin A', 'Dest B', 12.5, 'geoapify', now())
+      `;
+      await db`
+        INSERT INTO public.saved_mappings (id, user_id, table_id, origin_field_id, destination_field_id, distance_field_id, created_at, updated_at)
+        VALUES (${crypto.randomUUID()}, ${testUserId}, 'tbl_test', 'fld_o', 'fld_d', 'fld_dist', now(), now())
+      `;
+
+      // Verify records exist
+      const [cntLogsBefore] = await db`SELECT count(*)::int as c FROM public.calculation_logs WHERE user_id = ${testUserId}`;
+      expect(cntLogsBefore.c).toBe(1);
+      const [cntSettingsBefore] = await db`SELECT count(*)::int as c FROM public.user_settings WHERE id = ${testUserId}`;
+      expect(cntSettingsBefore.c).toBe(1);
+
+      // Delete the auth user
+      await db`SET ROLE postgres`;
+      await db`DELETE FROM auth.users WHERE id = ${testUserId}`;
+
+      // Verify cascading deletion of user-owned tables
+      const [cntLogsAfter] = await db`SELECT count(*)::int as c FROM public.calculation_logs WHERE user_id = ${testUserId}`;
+      expect(cntLogsAfter.c).toBe(0);
+      const [cntSettingsAfter] = await db`SELECT count(*)::int as c FROM public.user_settings WHERE id = ${testUserId}`;
+      expect(cntSettingsAfter.c).toBe(0);
+      const [cntMappingsAfter] = await db`SELECT count(*)::int as c FROM public.saved_mappings WHERE user_id = ${testUserId}`;
+      expect(cntMappingsAfter.c).toBe(0);
     });
   });
 

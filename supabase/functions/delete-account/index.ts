@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { executeAccountDeletion } from "../_shared/account-deletion.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -50,66 +51,57 @@ Deno.serve(async (req) => {
 
     userId = userData.user.id;
 
-    // Rate limit: at most one attempt per hour per user
-    const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
-    const { data: recent, error: recentErr } = await admin
-      .from("account_deletion_attempts")
-      .select("attempted_at")
-      .eq("user_id", userId)
-      .gte("attempted_at", since)
-      .order("attempted_at", { ascending: false })
-      .limit(1);
+    const result = await executeAccountDeletion(userId, {
+      checkRateLimit: async (uid) => {
+        const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
+        const { data: recent, error: recentErr } = await admin
+          .from("account_deletion_attempts")
+          .select("attempted_at")
+          .eq("user_id", uid)
+          .gte("attempted_at", since)
+          .order("attempted_at", { ascending: false })
+          .limit(1);
 
-    if (recentErr) {
-      await logAttempt("error", `rate-check failed: ${recentErr.message}`);
-      return new Response(JSON.stringify({ error: "Rate-limit check failed" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+        if (recentErr) {
+          return { rateLimited: false, error: recentErr.message };
+        }
 
-    if (recent && recent.length > 0) {
-      const last = new Date(recent[0].attempted_at).getTime();
-      const retryAfterSec = Math.max(
-        1,
-        Math.ceil((last + RATE_LIMIT_WINDOW_MS - Date.now()) / 1000),
-      );
-      await logAttempt("rate_limited");
-      return new Response(
-        JSON.stringify({
-          error: "Too many deletion attempts. Try again later.",
-          retry_after_seconds: retryAfterSec,
-        }),
-        {
-          status: 429,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-            "Retry-After": String(retryAfterSec),
-          },
-        },
-      );
-    }
+        if (recent && recent.length > 0) {
+          const last = new Date(recent[0].attempted_at).getTime();
+          const retryAfterSec = Math.max(
+            1,
+            Math.ceil((last + RATE_LIMIT_WINDOW_MS - Date.now()) / 1000)
+          );
+          return { rateLimited: true, retryAfterSec };
+        }
 
-    // Delete user-owned rows (no FK cascade in place)
-    await admin.from("calculation_logs").delete().eq("user_id", userId);
-    await admin.from("saved_mappings").delete().eq("user_id", userId);
-    await admin.from("user_settings").delete().eq("id", userId);
+        return { rateLimited: false };
+      },
+      deleteAuthUser: async (uid) => {
+        return await admin.auth.admin.deleteUser(uid);
+      },
+      deleteCalculationLogs: async (uid) => {
+        const { error } = await admin.from("calculation_logs").delete().eq("user_id", uid);
+        return { error };
+      },
+      deleteSavedMappings: async (uid) => {
+        const { error } = await admin.from("saved_mappings").delete().eq("user_id", uid);
+        return { error };
+      },
+      deleteUserSettings: async (uid) => {
+        const { error } = await admin.from("user_settings").delete().eq("id", uid);
+        return { error };
+      },
+      logAttempt,
+    });
 
-    // Delete the auth user (revokes all sessions)
-    const { error: delErr } = await admin.auth.admin.deleteUser(userId);
-    if (delErr) {
-      await logAttempt("error", delErr.message);
-      return new Response(JSON.stringify({ error: delErr.message }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    await logAttempt("success");
-
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        ...(result.headers ?? {}),
+      },
     });
   } catch (err) {
     const message = (err as Error).message;
