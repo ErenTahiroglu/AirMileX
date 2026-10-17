@@ -58,8 +58,8 @@ const PrivacyPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">8. Yurt Dışına Aktarım</h3>
         <p className="mb-4 text-muted-foreground">Teknik altyapı ve ödeme sağlayıcıları nedeniyle kişisel veriler Türkiye dışında bulunan sunuculara aktarılabilir. Uygun koruma mekanizmaları gözetilir.</p>
 
-        <h3 className="text-xl font-semibold mt-6 mb-2">9. Saklama Süresi</h3>
-        <p className="mb-4 text-muted-foreground">Veriler; hizmetin sunulması, hesabın aktif olması, hukuki/mali saklama zorunlulukları ve güvenlik ihtiyaçları süresince saklanır. Süre sonunda silinir, yok edilir veya anonim hale getirilir.</p>
+        <h3 className="text-xl font-semibold mt-6 mb-2">9. Saklama Süresi ve Hesap Silme</h3>
+        <p className="mb-4 text-muted-foreground">Veriler; hizmetin sunulması, hesabın aktif olması, meşru güvenlik ihtiyaçları ve hukuki/mali saklama yükümlülükleri süresince saklanır. Kullanıcı hesabını sildiğinde hesap tercihleri, kaydedilen rota/adres verileri ve hesaplama logları silinir. Kötüye kullanımı ve brute-force saldırılarını önleme amaçlı silme denetim logları ile Paddle üzerinden gerçekleştirilen ödeme işlem makbuzları; muhasebe, vergi, ters ibraz ve uyuşmazlık çözümü gereksinimleri doğrultusunda meşru sürelerle saklanabilir. Kesin yasal saklama süreleri bakımından uygulanabilir mevzuat hükümleri geçerlidir ve periyodik hukuki incelemeye tabidir.</p>
 
         <h3 className="text-xl font-semibold mt-6 mb-2">10. Güvenlik</h3>
         <p className="mb-4 text-muted-foreground">Kişisel verilerin yetkisiz erişim veya kayba karşı korunması için makul tedbirler alınır. Ancak internet üzerinden hiçbir sistem mutlak güvenlik garantisi vermez.</p>
@@ -113,8 +113,8 @@ const PrivacyPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">8. International Transfers</h3>
         <p className="mb-4 text-muted-foreground">Data may be transferred to servers outside Türkiye due to technical infrastructure. Appropriate safeguards will be used.</p>
 
-        <h3 className="text-xl font-semibold mt-6 mb-2">9. Retention</h3>
-        <p className="mb-4 text-muted-foreground">Data is retained as long as necessary to provide the service, while your account is active, or for legal/tax obligations.</p>
+        <h3 className="text-xl font-semibold mt-6 mb-2">9. Retention and Account Deletion</h3>
+        <p className="mb-4 text-muted-foreground">Data is retained as long as necessary to provide the service, while your account is active, for legitimate operational security, and to comply with statutory legal and tax obligations. When you delete your account, your user settings, saved address pairs, and mileage calculation logs are removed. Account deletion audit attempts (to enforce rate limits and prevent abuse) and Paddle payment transaction receipts may be retained for legitimate accounting, tax, chargeback, and dispute defense purposes. Exact statutory retention durations are governed by applicable mandatory laws and subject to ongoing owner legal review.</p>
 
         <h3 className="text-xl font-semibold mt-6 mb-2">10. Security</h3>
         <p className="mb-4 text-muted-foreground">Reasonable measures are used to protect data, though absolute internet security cannot be guaranteed.</p>

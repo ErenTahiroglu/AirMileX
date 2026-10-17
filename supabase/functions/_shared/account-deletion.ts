@@ -29,6 +29,29 @@ export interface AccountDeletionResult {
 }
 
 /**
+ * Sanitizes error and audit messages to prevent leakage of PII, credentials,
+ * tokens, session headers, and backend connection details.
+ */
+export function sanitizeErrorMessage(message?: string | null): string | null {
+  if (!message || typeof message !== "string") return null;
+
+  return message
+    .slice(0, 500)
+    // Redact email addresses
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[REDACTED_EMAIL]")
+    // Redact Bearer tokens & JWTs
+    .replace(/Bearer\s+[A-Za-z0-9-_=.]+/gi, "Bearer [REDACTED_TOKEN]")
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._-]+\b/g, "[REDACTED_JWT]")
+    // Redact connection strings (e.g. postgres://user:pass@host:5432/db)
+    .replace(/[a-zA-Z+]+:\/\/[^:]+:[^@]+@[^\s"']+/gi, "[REDACTED_CONNECTION_STRING]")
+    // Redact explicit secret/token fields
+    .replace(/(?:otp|token|code|password|secret|apikey)\s*[:=]\s*["']?[^"'\s,]+["']?/gi, (match) => {
+      const parts = match.split(/[:=]/);
+      return `${parts[0]}: [REDACTED]`;
+    });
+}
+
+/**
  * Executes safe account deletion:
  * 1. Enforces server-side step-up reauthentication (valid email OTP).
  * 2. Validates rate limit.

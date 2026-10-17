@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { executeAccountDeletion } from "../_shared/account-deletion.ts";
+import { executeAccountDeletion, sanitizeErrorMessage } from "../_shared/account-deletion.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,11 +21,7 @@ Deno.serve(async (req) => {
 
   const logAttempt = async (status: string, errorMessage?: string) => {
     if (!userId) return;
-    const sanitizedError = errorMessage
-      ? errorMessage
-          .slice(0, 500)
-          .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[REDACTED_EMAIL]")
-      : null;
+    const sanitizedError = sanitizeErrorMessage(errorMessage);
     await admin.from("account_deletion_attempts").insert({
       user_id: userId,
       status,
@@ -86,6 +82,22 @@ Deno.serve(async (req) => {
             return { verified: false, error: "No email associated with account" };
           }
 
+          // Brute-force protection: check if there are >= 5 failed attempts in the last 15 minutes
+          const recentFailedSince = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+          const { count: failedCount } = await admin
+            .from("account_deletion_attempts")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", uid)
+            .eq("status", "unauthorized")
+            .gte("attempted_at", recentFailedSince);
+
+          if (failedCount && failedCount >= 5) {
+            return {
+              verified: false,
+              error: "Too many failed verification attempts. Please wait 15 minutes before trying again.",
+            };
+          }
+
           // Verify the OTP via Supabase Auth
           const authClient = createClient(supabaseUrl, anonKey);
           const { data: verifyData, error: verifyErr } = await authClient.auth.verifyOtp({
@@ -105,10 +117,13 @@ Deno.serve(async (req) => {
         },
         checkRateLimit: async (uid) => {
           const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
+          // Rate-limiting applies to actual deletion attempts (success, error, partial_failure).
+          // Failed OTP attempts (unauthorized) do not lock legitimate users out for 1 hour.
           const { data: recent, error: recentErr } = await admin
             .from("account_deletion_attempts")
             .select("attempted_at")
             .eq("user_id", uid)
+            .neq("status", "unauthorized")
             .gte("attempted_at", since)
             .order("attempted_at", { ascending: false })
             .limit(1);
@@ -163,12 +178,18 @@ Deno.serve(async (req) => {
         ...(result.headers ?? {}),
       },
     });
-  } catch (err) {
-    const message = (err as Error).message;
-    await logAttempt("error", message);
-    return new Response(JSON.stringify({ error: message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  } catch (err: unknown) {
+    const errorType = err instanceof Error ? err.name : "UnknownError";
+    console.error(`delete-account uncaught error (${errorType})`);
+    if (userId) {
+      await logAttempt("error", `uncaught-exception: ${errorType}`);
+    }
+    return new Response(
+      JSON.stringify({ error: "An unexpected error occurred during account deletion" }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
   }
 });

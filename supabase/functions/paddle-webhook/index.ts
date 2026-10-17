@@ -64,10 +64,11 @@ Deno.serve(async (req) => {
       status: result.status,
       headers: { "Content-Type": "application/json" },
     });
-  } catch (err: any) {
-    console.error("paddle-webhook uncaught error:", err);
+  } catch (err: unknown) {
+    const errorType = err instanceof Error ? err.name : "UnknownError";
+    console.error(`paddle-webhook uncaught error (${errorType})`);
     return new Response(
-      JSON.stringify({ error: "Internal server error", details: err?.message ?? String(err) }),
+      JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }

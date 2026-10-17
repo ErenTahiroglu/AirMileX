@@ -1,6 +1,6 @@
 # AirMileX
 
-> Automate mileage tracking by connecting Airtable to mapping providers (Google Maps, OpenRouteService) and generating accurate driving-distance reports.
+> Automate mileage tracking by connecting Airtable to map routing providers (operator-managed Geoapify) and generating accurate driving-distance reports.
 
 AirMileX is a web app that reads address columns from an Airtable base, calculates driving distances in batches, writes results back to the base, and produces audit-ready mileage logs. Pricing is one-time credit packs.
 

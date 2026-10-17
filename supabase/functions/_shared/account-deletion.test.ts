@@ -325,4 +325,62 @@ describe("AirMileX Phase 5B-R4: Account Deletion Step-Up & Safety Invariants", (
     expect(loggedStatus).toBe("partial_failure");
     expect(loggedError).toContain("Account deleted from Auth, but cleanup failed");
   });
+
+  // -------------------------------------------------------------------------
+  // Phase B Correctness & Security Hygiene Tests
+  // -------------------------------------------------------------------------
+  describe("B1 & B2: Secret-safe error redaction & OTP usability", () => {
+    it("TASK B2: sanitizeErrorMessage redacts emails, tokens, secrets, and connection strings", async () => {
+      const { sanitizeErrorMessage } = await import("./account-deletion.ts");
+
+      // Email canary
+      expect(sanitizeErrorMessage("Error for test.user+tag@domain.co.uk: timeout")).toBe(
+        "Error for [REDACTED_EMAIL]: timeout"
+      );
+
+      // Bearer token canary
+      expect(
+        sanitizeErrorMessage("Failed request with Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-ID5_real_jwt_secret")
+      ).toContain("Bearer [REDACTED_TOKEN]");
+
+      // Standalone JWT canary
+      expect(
+        sanitizeErrorMessage("Token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.abcdef123456 expired")
+      ).toBe("Token [REDACTED_JWT] expired");
+
+      // Database connection string canary
+      expect(
+        sanitizeErrorMessage("DB error: postgres://postgres:SecretPass123!@db.project.supabase.co:5432/postgres failed")
+      ).toBe("DB error: [REDACTED_CONNECTION_STRING] failed");
+
+      // API key / secret canary
+      expect(
+        sanitizeErrorMessage("Failed with apikey: sbp_live_secret_key_99999 and password: MyPassword")
+      ).toContain("[REDACTED]");
+
+      // Max length truncation
+      const longMessage = "A".repeat(800);
+      expect(sanitizeErrorMessage(longMessage)?.length).toBe(500);
+
+      // Null/empty handling
+      expect(sanitizeErrorMessage(null)).toBeNull();
+      expect(sanitizeErrorMessage(undefined)).toBeNull();
+      expect(sanitizeErrorMessage("")).toBeNull();
+    });
+
+    it("TASK B1: prior failed OTP attempt does not block subsequent legitimate deletion with correct code", async () => {
+      // User attempts deletion with mistyped code -> gets 401
+      const deps = createMockDeps();
+      const firstRes = await executeAccountDeletion(VALID_USER_ID, deps, {
+        userEmail: VALID_USER_EMAIL,
+        otpCode: "999999", // Wrong code
+      });
+      expect(firstRes.status).toBe(401);
+
+      // User immediately enters correct code -> passes step-up and succeeds (no 1-hour 429 lockout)
+      const secondRes = await executeAccountDeletion(VALID_USER_ID, deps, defaultStepUpOptions);
+      expect(secondRes.status).toBe(200);
+      expect(secondRes.body.success).toBe(true);
+    });
+  });
 });

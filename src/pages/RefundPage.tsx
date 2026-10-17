@@ -27,8 +27,8 @@ const RefundPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">2. 30 Günlük Money-Back Guarantee</h3>
         <p className="mb-4 text-muted-foreground">AirMileX, ticari politika olarak uygun satın alımlar için 30 günlük para iade garantisi sunar. Kötüye kullanım bulunmadıkça, tahsilat tarihinden itibaren 30 takvim günü içinde yapılan iade talepleri değerlendirilebilir. Bu vaat zorunlu tüketici haklarını sınırlamaz.</p>
 
-        <h3 className="text-xl font-semibold mt-6 mb-2">3. Abonelik İptali</h3>
-        <p className="mb-4 text-muted-foreground">Aboneliğinizi istediğiniz zaman iptal edebilirsiniz. İptal, faturalama döneminin sonunda yürürlüğe girer ve gelecekteki tahsilatı durdurur. İptal ile iade aynı şey değildir.</p>
+        <h3 className="text-xl font-semibold mt-6 mb-2">3. Satın Alma Türü ve Abonelik İptali</h3>
+        <p className="mb-4 text-muted-foreground">AirMileX şu anda tek seferlik kredi paketleri (500 mil kredisi / 9$) şeklinde sunulmaktadır ve tekrarlayan aktif bir abonelik satılmamaktadır (ücretli satın alımlar lansman doğrulamasının ardından açılacaktır). Gelecekte tekrarlayan bir abonelik sunulması halinde, aboneliğinizi istediğiniz zaman iptal edebilirsiniz; iptal, ilgili faturalama döneminin sonunda yürürlüğe girer ve sonraki yenilemeleri durdurur.</p>
 
         <h3 className="text-xl font-semibold mt-6 mb-2">4. İadenin Uygun Olduğu Haller</h3>
         <ul className="list-disc pl-6 mb-4 text-muted-foreground">
@@ -71,8 +71,8 @@ const RefundPage = () => (
         <h3 className="text-xl font-semibold mt-6 mb-2">2. 30-Day Money-Back Guarantee</h3>
         <p className="mb-4 text-muted-foreground">AirMileX offers a 30-day money-back guarantee for eligible purchases. Unless abuse or fraud applies, requests made within 30 days of the charge date may be considered.</p>
 
-        <h3 className="text-xl font-semibold mt-6 mb-2">3. Subscription Cancellation</h3>
-        <p className="mb-4 text-muted-foreground">You may cancel at any time. Cancellation takes effect at the end of the billing period and stops future billing. Cancellation is not the same as a refund.</p>
+        <h3 className="text-xl font-semibold mt-6 mb-2">3. Purchase Model and Subscription Cancellation</h3>
+        <p className="mb-4 text-muted-foreground">AirMileX currently offers one-time credit purchases (e.g., 500 mileage credits for $9) rather than recurring subscriptions (paid purchases will activate following final gateway verification). If recurring subscriptions are introduced in the future, you may cancel at any time; cancellation takes effect at the end of the billing cycle and prevents future renewals.</p>
 
         <h3 className="text-xl font-semibold mt-6 mb-2">4. Situations Where a Refund May Be Granted</h3>
         <ul className="list-disc pl-6 mb-4 text-muted-foreground">
