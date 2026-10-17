@@ -109,10 +109,11 @@ const SettingsPage = () => {
     if (!user) return;
     setExporting(true);
     try {
-      const [settingsRes, mappings, logs] = await Promise.all([
+      const [settingsRes, mappings, logs, addressPairs] = await Promise.all([
         supabase.rpc("get_settings_flags", { p_user_id: user.id }),
         supabase.from("saved_mappings").select("*").eq("user_id", user.id),
         supabase.from("calculation_logs").select("*").eq("user_id", user.id),
+        supabase.from("saved_address_pairs").select("*").eq("user_id", user.id),
       ]);
 
       const settingsRow = Array.isArray(settingsRes.data) ? settingsRes.data[0] : null;
@@ -123,6 +124,7 @@ const SettingsPage = () => {
         settings: settingsRow ?? null,
         saved_mappings: mappings.data ?? [],
         calculation_logs: logs.data ?? [],
+        saved_address_pairs: addressPairs.data ?? [],
       };
 
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -374,8 +376,10 @@ const SettingsPage = () => {
                     <AlertDialogHeader>
                       <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        This will permanently delete your account, settings, saved mappings, and
-                        calculation history. This action cannot be undone.
+                        This will permanently delete your account, settings, saved address pairs,
+                        saved mappings, and calculation history. This action cannot be undone.
+                        An audit log of the deletion request timestamp and status is retained for
+                        security and rate-limiting purposes.
                         <br /><br />
                         We strongly recommend exporting your data first. Type <strong>DELETE</strong>{" "}
                         to continue — we'll then email a 6-digit code to confirm.

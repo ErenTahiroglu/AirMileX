@@ -1,6 +1,7 @@
 export interface AccountDeletionDeps {
   deleteAuthUser: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
   deleteCalculationLogs: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
+  deleteSavedAddressPairs: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
   deleteSavedMappings: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
   deleteUserSettings: (userId: string) => Promise<{ error: Error | { message: string } | null }>;
   logAttempt: (status: string, errorMessage?: string) => Promise<void>;
@@ -77,6 +78,9 @@ export async function executeAccountDeletion(
 
   const { error: logsErr } = await deps.deleteCalculationLogs(userId);
   if (logsErr) cleanupErrors.push(`calculation_logs: ${logsErr.message}`);
+
+  const { error: addressErr } = await deps.deleteSavedAddressPairs(userId);
+  if (addressErr) cleanupErrors.push(`saved_address_pairs: ${addressErr.message}`);
 
   const { error: mapsErr } = await deps.deleteSavedMappings(userId);
   if (mapsErr) cleanupErrors.push(`saved_mappings: ${mapsErr.message}`);

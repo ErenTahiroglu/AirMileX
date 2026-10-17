@@ -84,6 +84,10 @@ Deno.serve(async (req) => {
         const { error } = await admin.from("calculation_logs").delete().eq("user_id", uid);
         return { error };
       },
+      deleteSavedAddressPairs: async (uid) => {
+        const { error } = await admin.from("saved_address_pairs").delete().eq("user_id", uid);
+        return { error };
+      },
       deleteSavedMappings: async (uid) => {
         const { error } = await admin.from("saved_mappings").delete().eq("user_id", uid);
         return { error };

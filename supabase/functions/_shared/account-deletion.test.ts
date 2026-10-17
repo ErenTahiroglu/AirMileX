@@ -12,6 +12,7 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       checkRateLimit: async () => ({ rateLimited: false }),
       deleteAuthUser: async () => ({ error: null }),
       deleteCalculationLogs: async () => ({ error: null }),
+      deleteSavedAddressPairs: async () => ({ error: null }),
       deleteSavedMappings: async () => ({ error: null }),
       deleteUserSettings: async () => ({ error: null }),
       logAttempt: async () => {},
@@ -62,10 +63,11 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
     expect(loggedError).toContain("rate-check failed: DB connection timeout");
   });
 
-  it("INVARIANT: Auth deletion failure returns 500 and NEVER deletes user_settings or calculation data", async () => {
+  it("INVARIANT: Auth deletion failure returns 500 and NEVER deletes user_settings, address pairs, or calculation data", async () => {
     let userSettingsDeleted = false;
     let logsDeleted = false;
     let mappingsDeleted = false;
+    let addressPairsDeleted = false;
     let loggedStatus = "";
     let loggedError: string | undefined;
 
@@ -77,6 +79,10 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
       deleteCalculationLogs: async () => {
         logsDeleted = true;
+        return { error: null };
+      },
+      deleteSavedAddressPairs: async () => {
+        addressPairsDeleted = true;
         return { error: null };
       },
       deleteSavedMappings: async () => {
@@ -95,17 +101,18 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
     expect(res.status).toBe(500);
     expect(res.body.error).toBe("Auth service unavailable");
 
-    // CRITICAL: Financial & user data was NOT deleted
+    // CRITICAL: Financial, address & user data was NOT deleted
     expect(userSettingsDeleted).toBe(false);
     expect(logsDeleted).toBe(false);
     expect(mappingsDeleted).toBe(false);
+    expect(addressPairsDeleted).toBe(false);
 
     // Verify attempt logged with error
     expect(loggedStatus).toBe("error");
     expect(loggedError).toContain("auth-deletion-failed");
   });
 
-  it("INVARIANT: Successful deletion executes Auth deletion FIRST, then cleans up database rows", async () => {
+  it("INVARIANT: Successful deletion executes Auth deletion FIRST, then cleans up database rows including saved_address_pairs", async () => {
     const executionOrder: string[] = [];
     let loggedStatus = "";
 
@@ -116,6 +123,10 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
       },
       deleteCalculationLogs: async () => {
         executionOrder.push("logs");
+        return { error: null };
+      },
+      deleteSavedAddressPairs: async () => {
+        executionOrder.push("address_pairs");
         return { error: null };
       },
       deleteSavedMappings: async () => {
@@ -139,10 +150,36 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
     // Verify Auth deletion happened before any table deletion
     expect(executionOrder[0]).toBe("auth");
     expect(executionOrder).toContain("logs");
+    expect(executionOrder).toContain("address_pairs");
     expect(executionOrder).toContain("mappings");
     expect(executionOrder).toContain("settings");
 
     expect(loggedStatus).toBe("success");
+  });
+
+  it("INVARIANT: Partial database cleanup failure on saved_address_pairs reports failure without misleading success", async () => {
+    let loggedStatus = "";
+    let loggedError: string | undefined;
+
+    const deps = createMockDeps({
+      deleteAuthUser: async () => ({ error: null }),
+      deleteCalculationLogs: async () => ({ error: null }),
+      deleteSavedAddressPairs: async () => ({ error: new Error("Address pairs table locked") }),
+      deleteSavedMappings: async () => ({ error: null }),
+      deleteUserSettings: async () => ({ error: null }),
+      logAttempt: async (status, err) => {
+        loggedStatus = status;
+        loggedError = err;
+      },
+    });
+
+    const res = await executeAccountDeletion(VALID_USER_ID, deps);
+
+    // Must NOT return 200 success
+    expect(res.status).toBe(500);
+    expect(String(res.body.error)).toContain("saved_address_pairs: Address pairs table locked");
+    expect(loggedStatus).toBe("partial_failure");
+    expect(loggedError).toContain("Account deleted from Auth, but cleanup failed");
   });
 
   it("INVARIANT: Partial database cleanup failure after auth deletion reports failure without misleading success", async () => {
@@ -152,6 +189,7 @@ describe("AirMileX Phase 5B-R3: Account Deletion Invariants & Safety", () => {
     const deps = createMockDeps({
       deleteAuthUser: async () => ({ error: null }),
       deleteCalculationLogs: async () => ({ error: null }),
+      deleteSavedAddressPairs: async () => ({ error: null }),
       deleteSavedMappings: async () => ({ error: new Error("Foreign key lock timeout") }),
       deleteUserSettings: async () => ({ error: null }),
       logAttempt: async (status, err) => {

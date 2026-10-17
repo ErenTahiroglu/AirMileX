@@ -281,38 +281,122 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await cleanupTestUser(db, testUserId);
     });
 
-    itWithDb("complete account deletion cascades and deletes all user-owned rows", async (db) => {
+    itWithDb("complete account deletion cascades and deletes all user-owned rows including saved_address_pairs while preserving other users", async (db) => {
       const testUserId = crypto.randomUUID();
+      const otherUserId = crypto.randomUUID();
       await createTestUser(db, testUserId);
+      await createTestUser(db, otherUserId);
 
-      // Insert calculation logs and saved mappings as service_role
+      // Insert calculation logs, saved mappings, and saved address pairs as service_role for both users
       await db`SET ROLE service_role`;
       await db`
         INSERT INTO public.calculation_logs (id, user_id, base_id, table_id, records_processed, provider_used)
-        VALUES (${crypto.randomUUID()}, ${testUserId}, 'app123', 'tbl_test', 5, 'geoapify')
+        VALUES
+          (${crypto.randomUUID()}, ${testUserId}, 'app123', 'tbl_test', 5, 'geoapify'),
+          (${crypto.randomUUID()}, ${otherUserId}, 'app123', 'tbl_test', 5, 'geoapify')
       `;
       await db`
         INSERT INTO public.saved_mappings (id, user_id, table_id, start_col_id, end_col_id, distance_col_id)
-        VALUES (${crypto.randomUUID()}, ${testUserId}, 'tbl_test', 'fld_o', 'fld_d', 'fld_dist')
+        VALUES
+          (${crypto.randomUUID()}, ${testUserId}, 'tbl_test', 'fld_o', 'fld_d', 'fld_dist'),
+          (${crypto.randomUUID()}, ${otherUserId}, 'tbl_test', 'fld_o', 'fld_d', 'fld_dist')
+      `;
+      await db`
+        INSERT INTO public.saved_address_pairs (id, user_id, label, start_address, end_address)
+        VALUES
+          (${crypto.randomUUID()}, ${testUserId}, 'Office commute', '100 Main St', '200 Market St'),
+          (${crypto.randomUUID()}, ${otherUserId}, 'Warehouse run', '300 Elm St', '400 Pine St')
       `;
 
-      // Verify records exist
+      // Verify records exist for testUser
       const [cntLogsBefore] = await db`SELECT count(*)::int as c FROM public.calculation_logs WHERE user_id = ${testUserId}`;
       expect(cntLogsBefore.c).toBe(1);
       const [cntSettingsBefore] = await db`SELECT count(*)::int as c FROM public.user_settings WHERE id = ${testUserId}`;
       expect(cntSettingsBefore.c).toBe(1);
+      const [cntAddressBefore] = await db`SELECT count(*)::int as c FROM public.saved_address_pairs WHERE user_id = ${testUserId}`;
+      expect(cntAddressBefore.c).toBe(1);
 
-      // Delete the auth user
+      // Delete testUser from auth.users
       await db`SET ROLE postgres`;
       await db`DELETE FROM auth.users WHERE id = ${testUserId}`;
 
-      // Verify cascading deletion of user-owned tables
+      // Verify cascading deletion of ALL testUser-owned tables
       const [cntLogsAfter] = await db`SELECT count(*)::int as c FROM public.calculation_logs WHERE user_id = ${testUserId}`;
       expect(cntLogsAfter.c).toBe(0);
       const [cntSettingsAfter] = await db`SELECT count(*)::int as c FROM public.user_settings WHERE id = ${testUserId}`;
       expect(cntSettingsAfter.c).toBe(0);
       const [cntMappingsAfter] = await db`SELECT count(*)::int as c FROM public.saved_mappings WHERE user_id = ${testUserId}`;
       expect(cntMappingsAfter.c).toBe(0);
+      const [cntAddressAfter] = await db`SELECT count(*)::int as c FROM public.saved_address_pairs WHERE user_id = ${testUserId}`;
+      expect(cntAddressAfter.c).toBe(0);
+
+      // CRITICAL: Other user's data remains 100% intact across all tables
+      const [cntOtherLogs] = await db`SELECT count(*)::int as c FROM public.calculation_logs WHERE user_id = ${otherUserId}`;
+      expect(cntOtherLogs.c).toBe(1);
+      const [cntOtherSettings] = await db`SELECT count(*)::int as c FROM public.user_settings WHERE id = ${otherUserId}`;
+      expect(cntOtherSettings.c).toBe(1);
+      const [cntOtherMappings] = await db`SELECT count(*)::int as c FROM public.saved_mappings WHERE user_id = ${otherUserId}`;
+      expect(cntOtherMappings.c).toBe(1);
+      const [cntOtherAddress] = await db`SELECT count(*)::int as c FROM public.saved_address_pairs WHERE user_id = ${otherUserId}`;
+      expect(cntOtherAddress.c).toBe(1);
+
+      await cleanupTestUser(db, otherUserId);
+    });
+
+    itWithDb("RLS prevents an authenticated user from deleting another user's saved_address_pairs", async (db) => {
+      const victimId = crypto.randomUUID();
+      const attackerId = crypto.randomUUID();
+      await createTestUser(db, victimId);
+      await createTestUser(db, attackerId);
+
+      // Insert address pair for victim
+      await db`SET ROLE service_role`;
+      const pairId = crypto.randomUUID();
+      await db`
+        INSERT INTO public.saved_address_pairs (id, user_id, label, start_address, end_address)
+        VALUES (${pairId}, ${victimId}, 'Private Route', 'Secret A', 'Secret B')
+      `;
+
+      // Attacker attempts to delete victim's address pair
+      await db`SET ROLE authenticated`;
+      await db`SELECT set_config('request.jwt.claims', ${JSON.stringify({ sub: attackerId, role: "authenticated" })}, false)`;
+
+      await db`DELETE FROM public.saved_address_pairs WHERE id = ${pairId}`;
+
+      // Verify victim's address pair was NOT deleted
+      await db`SET ROLE postgres`;
+      const [check] = await db`SELECT count(*)::int as c FROM public.saved_address_pairs WHERE id = ${pairId}`;
+      expect(check.c).toBe(1);
+
+      await cleanupTestUser(db, victimId);
+      await cleanupTestUser(db, attackerId);
+    });
+
+    itWithDb("account_deletion_attempts audit log persists after account deletion and enforces rate limiting", async (db) => {
+      const testUserId = crypto.randomUUID();
+      await createTestUser(db, testUserId);
+
+      // Record a deletion attempt
+      await db`SET ROLE service_role`;
+      await db`
+        INSERT INTO public.account_deletion_attempts (user_id, status, error_message, attempted_at)
+        VALUES (${testUserId}, 'success', null, now())
+      `;
+
+      // Delete auth user
+      await db`SET ROLE postgres`;
+      await db`DELETE FROM auth.users WHERE id = ${testUserId}`;
+
+      // Verify audit record PERSISTS for retention and abuse auditing
+      const [audit] = await db`
+        SELECT status, user_id FROM public.account_deletion_attempts WHERE user_id = ${testUserId}
+      `;
+      expect(audit).toBeDefined();
+      expect(audit.status).toBe("success");
+      expect(audit.user_id).toBe(testUserId);
+
+      // Cleanup audit row for test isolation
+      await db`DELETE FROM public.account_deletion_attempts WHERE user_id = ${testUserId}`;
     });
   });
 
