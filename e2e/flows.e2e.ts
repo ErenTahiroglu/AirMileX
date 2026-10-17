@@ -23,25 +23,27 @@ test.describe("AirMileX Phase 5B: Browser E2E Verification", () => {
     // Navigate with signup mode and destination intent
     await page.goto("/?mode=signup&next=/new-job");
 
-    // Auth card should reflect signup state
-    const cardTitle = page.locator("h2#auth-heading + div, .text-xl");
-    await expect(cardTitle.first()).toContainText("Claim 50 Free Credits");
+    const authSection = page.locator("section[aria-labelledby='auth-heading']");
 
-    const submitButton = page.locator('button[type="submit"]');
+    // Auth card should reflect signup state
+    const cardTitle = authSection.locator(".text-xl");
+    await expect(cardTitle).toContainText("Claim 50 Free Credits");
+
+    const submitButton = authSection.locator('button[type="submit"]');
     await expect(submitButton).toHaveText("Sign Up");
 
     // Toggle between login and signup modes
-    const toggleButton = page.locator("text=Already have an account? Sign in");
+    const toggleButton = authSection.locator("button", { hasText: "Already have an account? Sign in" });
     await expect(toggleButton).toBeVisible();
     await toggleButton.click();
 
-    await expect(page.locator('.text-xl').first()).toContainText("Welcome Back");
+    await expect(cardTitle).toContainText("Welcome Back");
     await expect(submitButton).toHaveText("Sign In");
 
     // Toggle back to signup
-    const backToSignup = page.locator("text=Don't have an account? Sign up");
+    const backToSignup = authSection.locator("button", { hasText: "Don't have an account? Sign up" });
     await backToSignup.click();
-    await expect(page.locator('.text-xl').first()).toContainText("Claim 50 Free Credits");
+    await expect(cardTitle).toContainText("Claim 50 Free Credits");
     await expect(submitButton).toHaveText("Sign Up");
   });
 
@@ -118,10 +120,12 @@ test.describe("AirMileX Phase 5B: Browser E2E Verification", () => {
       );
     });
 
+    const authSection = page.locator("section[aria-labelledby='auth-heading']");
+
     // Verify auth form is reached
-    await expect(page.locator('input[type="email"]')).toBeVisible();
-    await expect(page.locator('input[type="password"]')).toBeVisible();
-    await expect(page.locator('button[type="submit"]')).toBeVisible();
+    await expect(authSection.locator('input[type="email"]')).toBeVisible();
+    await expect(authSection.locator('input[type="password"]')).toBeVisible();
+    await expect(authSection.locator('button[type="submit"]')).toBeVisible();
   });
 
   // Flow 7: Airtable PAT setup instructions and required scopes are visible (UI E2E with mocked dependencies)
@@ -187,28 +191,30 @@ test.describe("AirMileX Phase 5B: Browser E2E Verification", () => {
 
   // Flow 8: Desktop and mobile layouts render the critical conversion controls
   test("Flow 8: Desktop and mobile layouts render critical conversion controls", async ({ page }) => {
+    const authSection = page.locator("section[aria-labelledby='auth-heading']");
+
     // 8A: Desktop layout (1280x800)
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
 
     await expect(page.locator("text=50 Free Mileage Credits on Signup").first()).toBeVisible();
-    await expect(page.locator("button", { hasText: "Continue with Google" })).toBeVisible();
-    await expect(page.locator('input[type="email"]')).toBeVisible();
-    await expect(page.locator('input[type="password"]')).toBeVisible();
-    await expect(page.locator('button[type="submit"]')).toBeVisible();
+    await expect(authSection.locator("button", { hasText: "Continue with Google" })).toBeVisible();
+    await expect(authSection.locator('input[type="email"]')).toBeVisible();
+    await expect(authSection.locator('input[type="password"]')).toBeVisible();
+    await expect(authSection.locator('button[type="submit"]')).toBeVisible();
 
     // 8B: Mobile layout (375x667)
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto("/");
 
     await expect(page.locator("text=50 Free Mileage Credits on Signup").first()).toBeVisible();
-    await expect(page.locator("button", { hasText: "Continue with Google" })).toBeVisible();
-    await expect(page.locator('input[type="email"]')).toBeVisible();
-    await expect(page.locator('input[type="password"]')).toBeVisible();
-    await expect(page.locator('button[type="submit"]')).toBeVisible();
+    await expect(authSection.locator("button", { hasText: "Continue with Google" })).toBeVisible();
+    await expect(authSection.locator('input[type="email"]')).toBeVisible();
+    await expect(authSection.locator('input[type="password"]')).toBeVisible();
+    await expect(authSection.locator('button[type="submit"]')).toBeVisible();
 
     // Verify submit button is clickable and within screen bounds
-    const box = await page.locator('button[type="submit"]').boundingBox();
+    const box = await authSection.locator('button[type="submit"]').boundingBox();
     expect(box).not.toBeNull();
     if (box) {
       expect(box.x).toBeGreaterThanOrEqual(0);
