@@ -100,6 +100,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await db`
         INSERT INTO public.user_settings (id)
         VALUES (${testUserId})
+        ON CONFLICT (id) DO NOTHING
       `;
 
       const rows = await db`
@@ -116,6 +117,8 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("unauthorized creation cannot inflate the initial balance past 50", async (db) => {
       const attackerUserId = crypto.randomUUID();
       await createTestUser(db, attackerUserId);
+      // Remove the trigger-created row to isolate direct unauthorized insert behavior
+      await db`DELETE FROM public.user_settings WHERE id = ${attackerUserId}`;
 
       try {
         // Set claims to authenticated role (simulating user calling via PostgREST)
@@ -248,7 +251,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("reservation reduces available credits atomically", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       // Reserve 10 credits as service_role
       await db`SET ROLE service_role`;
@@ -266,7 +269,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("insufficient balance cannot become negative", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       // Try to reserve 60 credits when only 50 are available
       await db`SET ROLE service_role`;
@@ -289,7 +292,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("successful refund restores the correct amount", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       // Reserve 20
       await db`SET ROLE service_role`;
@@ -308,7 +311,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("concurrent reservations preserve balance integrity without race condition", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       // Run 5 parallel reservations of 10 credits each (total 50).
       // Each parallel worker must use its own connection and set service_role so
@@ -425,7 +428,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("first valid transaction grants exactly 500 credits", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       // Call fulfill_paddle_credits as service_role
       await db`SET ROLE service_role`;
@@ -449,7 +452,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("identical webhook redelivery does not grant credits again", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       // Initial fulfillment
       await db`SET ROLE service_role`;
@@ -475,7 +478,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("same transaction ID under a different event ID does not grant credits again", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       await db`SET ROLE service_role`;
       await db`SELECT public.fulfill_paddle_credits('evt_orig', 'txn_shared', ${userId}, 500)`;
@@ -499,7 +502,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("two distinct completed purchases grant exactly 1,000 credits", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       // Purchase 1
       await db`SET ROLE service_role`;
@@ -518,7 +521,7 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
     itWithDb("unauthorized roles cannot call privileged fulfillment or reservation RPCs", async (db) => {
       const userId = crypto.randomUUID();
       await createTestUser(db, userId);
-      await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
+      await db`INSERT INTO public.user_settings (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
 
       try {
         // Attempt fulfill_paddle_credits as anon
