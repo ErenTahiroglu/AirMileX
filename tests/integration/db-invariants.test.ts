@@ -288,12 +288,12 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       // Insert calculation logs and saved mappings as service_role
       await db`SET ROLE service_role`;
       await db`
-        INSERT INTO public.calculation_logs (id, user_id, origin_address, destination_address, distance_miles, provider, created_at)
-        VALUES (${crypto.randomUUID()}, ${testUserId}, 'Origin A', 'Dest B', 12.5, 'geoapify', now())
+        INSERT INTO public.calculation_logs (id, user_id, base_id, table_id, records_processed, provider_used)
+        VALUES (${crypto.randomUUID()}, ${testUserId}, 'app123', 'tbl_test', 5, 'geoapify')
       `;
       await db`
-        INSERT INTO public.saved_mappings (id, user_id, table_id, origin_field_id, destination_field_id, distance_field_id, created_at, updated_at)
-        VALUES (${crypto.randomUUID()}, ${testUserId}, 'tbl_test', 'fld_o', 'fld_d', 'fld_dist', now(), now())
+        INSERT INTO public.saved_mappings (id, user_id, table_id, start_col_id, end_col_id, distance_col_id)
+        VALUES (${crypto.randomUUID()}, ${testUserId}, 'tbl_test', 'fld_o', 'fld_d', 'fld_dist')
       `;
 
       // Verify records exist
