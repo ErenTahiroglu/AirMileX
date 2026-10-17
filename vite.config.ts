@@ -22,5 +22,19 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     target: "es2022",
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("@supabase")) {
+              return "supabase-vendor";
+            }
+            if (id.includes("react") || id.includes("scheduler")) {
+              return "react-vendor";
+            }
+          }
+        },
+      },
+    },
   },
 }));
