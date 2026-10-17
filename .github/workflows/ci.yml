@@ -70,9 +70,9 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.121.0
       - name: Start isolated ephemeral local Supabase database
-        run: supabase start
+        run: supabase start -x studio,mailpit,storage,realtime,edge-runtime,vector,imgproxy,logflare
       - name: Execute real PostgreSQL financial & integration test suite
         run: bun run test:integration
         env:
@@ -80,4 +80,4 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - name: Stop ephemeral local Supabase stack
         if: always()
-        run: supabase stop --no-backup
+        run: which supabase >/dev/null 2>&1 && supabase stop --no-backup || true
