@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { SQL } from "bun";
 import {
   processPaddleWebhookRequest,
@@ -51,6 +51,8 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
 
   // Helper to ensure test user exists in auth.users for foreign key constraints
   const createTestUser = async (db: SQL, userId: string) => {
+    await db`SET ROLE postgres`;
+    await db`SELECT set_config('request.jwt.claims', '{"role": "service_role"}', false)`;
     await db`
       INSERT INTO auth.users (id, aud, role, email, created_at, updated_at)
       VALUES (${userId}, 'authenticated', 'authenticated', ${`user_${userId}@test.local`}, now(), now())
@@ -60,9 +62,17 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
 
   const cleanupTestUser = async (db: SQL, userId: string) => {
     await db`SET ROLE postgres`;
+    await db`SELECT set_config('request.jwt.claims', '{"role": "service_role"}', false)`;
     await db`DELETE FROM public.user_settings WHERE id = ${userId}`;
     await db`DELETE FROM auth.users WHERE id = ${userId}`;
   };
+
+  beforeEach(async () => {
+    if (dbAvailable && sql) {
+      await sql`SET ROLE postgres`;
+      await sql`SELECT set_config('request.jwt.claims', '{"role": "service_role"}', false)`;
+    }
+  });
 
   // Helper for skipping if DB is not available in local dev
   const itWithDb = (name: string, fn: (sql: SQL) => Promise<void>) => {
@@ -85,7 +95,8 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       const testUserId = crypto.randomUUID();
       await createTestUser(db, testUserId);
 
-      // Clean setup in user_settings
+      // Clean setup in user_settings with authenticated claims
+      await db`SELECT set_config('request.jwt.claims', '{"role": "authenticated"}', false)`;
       await db`
         INSERT INTO public.user_settings (id)
         VALUES (${testUserId})
@@ -106,19 +117,20 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       const attackerUserId = crypto.randomUUID();
       await createTestUser(db, attackerUserId);
 
-      // In Bun.sql, execute single statement per query
-      await db`SET LOCAL "request.jwt.claims" = '{"role": "authenticated"}'`;
-      await db`INSERT INTO public.user_settings (id, credits) VALUES (${attackerUserId}, 999999)`;
+      try {
+        // Set claims to authenticated role (simulating user calling via PostgREST)
+        await db`SELECT set_config('request.jwt.claims', '{"role": "authenticated"}', false)`;
+        await db`INSERT INTO public.user_settings (id, credits) VALUES (${attackerUserId}, 999999)`;
 
-      const rows = await db`
-        SELECT credits FROM public.user_settings WHERE id = ${attackerUserId}
-      `;
+        const rows = await db`
+          SELECT credits FROM public.user_settings WHERE id = ${attackerUserId}
+        `;
 
-      expect(rows.length).toBe(1);
-      expect(rows[0].credits).toBe(50); // Successfully reset to 50 by database trigger
-
-      // Cleanup
-      await cleanupTestUser(db, attackerUserId);
+        expect(rows.length).toBe(1);
+        expect(rows[0].credits).toBe(50); // Successfully reset to 50 by database trigger
+      } finally {
+        await cleanupTestUser(db, attackerUserId);
+      }
     });
   });
 
@@ -322,28 +334,39 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await createTestUser(db, userId);
       await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
 
-      // Attempt as anon
-      await db`SET ROLE anon`;
-      let anonFulfillBlocked = false;
       try {
-        await db`SELECT public.fulfill_paddle_credits('evt_unauth', 'txn_unauth', ${userId}, 500)`;
-      } catch (err: any) {
-        anonFulfillBlocked = true;
-      }
-      expect(anonFulfillBlocked).toBe(true);
+        // Attempt fulfill_paddle_credits as anon
+        await db`SET ROLE anon`;
+        let anonFulfillBlocked = false;
+        try {
+          await db`SELECT public.fulfill_paddle_credits('evt_unauth', 'txn_unauth', ${userId}, 500)`;
+        } catch (err: any) {
+          anonFulfillBlocked = true;
+        }
+        expect(anonFulfillBlocked).toBe(true);
 
-      // Attempt as authenticated
-      await db`SET ROLE authenticated`;
-      let authFulfillBlocked = false;
-      try {
-        await db`SELECT public.fulfill_paddle_credits('evt_unauth', 'txn_unauth', ${userId}, 500)`;
-      } catch (err: any) {
-        authFulfillBlocked = true;
-      }
-      expect(authFulfillBlocked).toBe(true);
+        // Attempt fulfill_paddle_credits as authenticated
+        await db`SET ROLE authenticated`;
+        let authFulfillBlocked = false;
+        try {
+          await db`SELECT public.fulfill_paddle_credits('evt_unauth', 'txn_unauth', ${userId}, 500)`;
+        } catch (err: any) {
+          authFulfillBlocked = true;
+        }
+        expect(authFulfillBlocked).toBe(true);
 
-      // Reset role back to service_role / postgres
-      await cleanupTestUser(db, userId);
+        // Attempt reserve_credits as authenticated
+        let authReserveBlocked = false;
+        try {
+          await db`SELECT public.reserve_credits(${userId}, 10)`;
+        } catch (err: any) {
+          authReserveBlocked = true;
+        }
+        expect(authReserveBlocked).toBe(true);
+      } finally {
+        await db`SET ROLE postgres`;
+        await cleanupTestUser(db, userId);
+      }
     });
 
     itWithDb("failed fulfillment does not leave a committed purchase event without balance update", async (db) => {
