@@ -203,19 +203,25 @@ describe("AirMileX Phase 5B: Part E Financial & Database Integration Tests", () 
       await createTestUser(db, userId);
       await db`INSERT INTO public.user_settings (id) VALUES (${userId})`;
 
-      await db`SET ROLE service_role`;
-      // Run 5 parallel reservations of 10 credits each (total 50)
-      const results = await Promise.allSettled([
-        db`SELECT public.reserve_credits(${userId}, 10)`,
-        db`SELECT public.reserve_credits(${userId}, 10)`,
-        db`SELECT public.reserve_credits(${userId}, 10)`,
-        db`SELECT public.reserve_credits(${userId}, 10)`,
-        db`SELECT public.reserve_credits(${userId}, 10)`,
-      ]);
+      // Run 5 parallel reservations of 10 credits each (total 50).
+      // Each parallel worker must use its own connection and set service_role so
+      // the prevent_credits_tampering trigger permits the atomic balance deduction.
+      const results = await Promise.allSettled(
+        Array.from({ length: 5 }, async () => {
+          const client = new SQL(PG_URL!);
+          try {
+            await client`SET ROLE service_role`;
+            return await client`SELECT public.reserve_credits(${userId}, 10)`;
+          } finally {
+            await client.close();
+          }
+        })
+      );
 
       const succeeded = results.filter((r) => r.status === "fulfilled").length;
       expect(succeeded).toBe(5);
 
+      await db`SET ROLE service_role`;
       const [row] = await db`SELECT credits FROM public.user_settings WHERE id = ${userId}`;
       expect(row.credits).toBe(0);
 
