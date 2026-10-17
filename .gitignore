@@ -25,3 +25,11 @@ dist-ssr
 test-results/
 playwright-report/
 
+# Environment & secret files
+.env
+.env.local
+.env.staging
+.env.staging.local
+.env.*
+!.env.example
+
