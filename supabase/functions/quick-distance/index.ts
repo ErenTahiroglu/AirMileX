@@ -135,6 +135,15 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // Paid provider calls are only available to verified signed-in users.
+    const authHeader = req.headers.get("authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    const { data: authData } = token ? await db.auth.getUser(token) : { data: null };
+    const userId = authData?.user?.id;
+    if (!userId) {
+      return json({ error: "Please sign in to use the mileage calculator." }, 401);
+    }
+
     const clientIp =
       req.headers.get("cf-connecting-ip") ??
       req.headers.get("x-real-ip") ??
@@ -142,7 +151,9 @@ serve(async (req) => {
     const ipHash = await hashIp(clientIp);
 
     const [perMinute, perHour, globalAllowed] = await Promise.all([
-      consumeQuota(db, `ip-min:${ipHash}`, QUICK_DISTANCE_IP_LIMIT_PER_MINUTE, 60),
+      consumeQuota(db, `qd-user-min:${userId}`, QUICK_DISTANCE_IP_LIMIT_PER_MINUTE, 60).then(
+        async (ok) => ok && (await consumeQuota(db, `ip-min:${ipHash}`, QUICK_DISTANCE_IP_LIMIT_PER_MINUTE, 60))
+      ),
       consumeQuota(db, `ip:${ipHash}`, QUICK_DISTANCE_IP_LIMIT_PER_HOUR, 3600),
       consumeQuota(db, "global", QUICK_DISTANCE_GLOBAL_LIMIT_PER_DAY, 86400),
     ]);

@@ -81,7 +81,7 @@ serve(async (req) => {
 
     const text = query.trim();
 
-    // Check optional authenticated user for per-user quota tracking
+    // Paid suggestions are only available to verified signed-in users.
     let userId: string | null = null;
     const authHeader = req.headers.get("authorization") ?? "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -89,12 +89,15 @@ serve(async (req) => {
       const { data } = await db.auth.getUser(token);
       userId = data?.user?.id ?? null;
     }
+    if (!userId) {
+      return json({ suggestions: [], error: "Sign in to see address suggestions." }, 401);
+    }
 
     const providers = await selectAutocompleteProviders({
       userId,
       hasGeoapifyKey: Boolean(GEOAPIFY_KEY),
       consumeQuota: async () => {
-        const userOk = userId ? await consumeQuota(db, `ac-user:${userId}`, 200, 86400) : true;
+        const userOk = await consumeQuota(db, `ac-user:${userId}`, 200, 86400);
         const globalOk = await consumeQuota(db, "ac-paid", PAID_LIMIT_PER_DAY, 86400);
         return userOk && globalOk;
       },

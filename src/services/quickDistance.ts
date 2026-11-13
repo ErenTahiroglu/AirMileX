@@ -7,7 +7,7 @@ export interface QuickDistanceResult {
 }
 
 /**
- * Public, no-login distance lookup used by the landing page widget.
+ * Distance lookup for signed-in users (sign-in required server-side).
  * Backed by open map services with keyed providers as failover.
  */
 export const quickDistance = async (
